@@ -15,7 +15,7 @@ from typing import Any
 import httpx
 import structlog
 
-from agent_core.schemas import ChatRequest, ChatResponse, UserRole
+from agent_kernel.schemas import ChatRequest, ChatResponse, UserRole
 
 logger = structlog.get_logger()
 

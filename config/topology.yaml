@@ -1,0 +1,15 @@
+# Service topology for OpsAgent diagnosis prior.
+#
+# Format:
+#   services:
+#     - name: <service name>
+#       namespace: <k8s namespace>
+#       env: <env label>
+#       owner: <team / person>
+#       runtime: <java | node | python | go | ...>
+#       dependencies: [<downstream service>, ...]
+#       tags: [<free-form tag>, ...]
+#
+# Empty file is valid — diagnosis degrades to non-topology mode.
+
+services: []

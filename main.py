@@ -57,9 +57,10 @@ async def index_docs(docs_dir: str):
 
 async def interactive_chat():
     """交互式命令行对话（调试用）"""
-    from agent_core import OpsAgent, ChatRequest
+    from agent_kernel.schemas import ChatRequest
+    from agent_ops import create_ops_agent
 
-    agent = OpsAgent()
+    agent = create_ops_agent()
     session_id = "cli-debug"
     print("\n🤖 OpsAgent 交互模式 (输入 'quit' 退出)\n")
 

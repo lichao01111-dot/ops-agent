@@ -14,28 +14,30 @@ import structlog
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from agent_core import OpsAgent, OpsAgentStreaming, ChatRequest, ChatResponse
-from agent_core.audit import audit_logger
-from agent_core.schemas import UserRole
+from agent_kernel.schemas import ChatRequest, ChatResponse, UserRole
+from agent_ops import OpsAgentStreaming, create_ops_agent_streaming
 from config import settings
-from tools import ALL_TOOLS
 
 logger = structlog.get_logger()
 
 # ===== Lifespan =====
 
 agent: OpsAgentStreaming | None = None
+agent_registry = None
+agent_audit_logger = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global agent
+    global agent, agent_registry, agent_audit_logger
     logger.info("starting_ops_agent", llm_provider=settings.llm_provider.value, llm_model=settings.llm_model)
-    agent = OpsAgentStreaming()
-    logger.info("ops_agent_ready", tools=[t.name for t in ALL_TOOLS])
+    agent = create_ops_agent_streaming()
+    agent_registry = agent.tool_registry
+    agent_audit_logger = agent.audit_logger
+    logger.info("ops_agent_ready", tools=[spec.name for spec in agent_registry.all_specs()])
     yield
     logger.info("shutting_down_ops_agent")
 
@@ -127,10 +129,12 @@ async def chat_stream(input_data: ChatInput):
 @app.get("/api/tools")
 async def list_tools():
     """获取已注册的 Tool 列表"""
+    if agent_registry is None:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
     return {
         "tools": [
-            {"name": t.name, "description": t.description}
-            for t in ALL_TOOLS
+            {"name": spec.name, "description": spec.description, "source": spec.source}
+            for spec in agent_registry.all_specs()
         ]
     }
 
@@ -138,10 +142,12 @@ async def list_tools():
 @app.get("/api/audit")
 async def get_audit_logs(user_id: str = "", limit: int = 50):
     """查询审计日志"""
+    if agent_audit_logger is None:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
     if user_id:
-        entries = audit_logger.get_by_user(user_id, limit)
+        entries = agent_audit_logger.get_by_user(user_id, limit)
     else:
-        entries = audit_logger.get_recent(limit)
+        entries = agent_audit_logger.get_recent(limit)
     return {"entries": [e.model_dump() for e in entries]}
 
 

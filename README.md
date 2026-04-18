@@ -1,6 +1,6 @@
 # OpsAgent
 
-基于 LangChain + LangGraph 构建的 DevOps AI Agent。当前实现已经从“单一 ReAct agent”重构为“路由优先 + 专用执行器”的架构，覆盖知识问答、只读运维查询、故障诊断和受审批约束的变更入口。
+基于 LangChain + LangGraph 构建的 DevOps AI Agent。当前实现已经从“单一 ReAct agent”重构为“Agent Kernel + Vertical Agent”的分层架构：通用编排骨架进入 `agent_kernel/`，Ops 垂直逻辑进入 `agent_ops/`，覆盖知识问答、只读运维查询、故障诊断和受审批约束的变更入口。
 
 ## 当前状态
 
@@ -24,7 +24,7 @@
 
 ## 推荐架构
 
-当前推荐架构采用“路由优先 + 专用执行器”的模式，而不是让所有请求都走统一 ReAct：
+当前推荐架构采用“Kernel + Vertical Agent”的模式，而不是让所有请求都走统一 ReAct：
 
 - `knowledge`：RAG-first，非 ReAct
 - `read_only_ops`：确定性查询执行器
@@ -34,23 +34,25 @@
 ```mermaid
 flowchart TD
     U["User / API / IM / CLI"] --> G["Gateway Layer"]
-    G --> V["Validation + Auth + RBAC"]
-    V --> S["Session / Audit Context"]
-    S --> R["Main Orchestrator / Router"]
-
-    R --> C{"Route Type"}
-    C -->|knowledge| K["Knowledge Executor"]
+    G --> O["Ops Vertical Agent"]
+    O --> K["Agent Kernel"]
+    K --> P["Planner + StateGraph"]
+    K --> T["ToolRegistry + MCP"]
+    K --> M["SessionStore + MemorySchema"]
+    O --> C{"Route Type"}
+    C -->|knowledge| KX["Knowledge Executor"]
     C -->|read_only_ops| Q["Read-Only Executor"]
     C -->|diagnosis| D["Diagnosis Executor"]
-    C -->|mutation| M["Mutation Executor"]
+    C -->|mutation| MX["Mutation Executor"]
 
-    K --> OUT["Final Response"]
+    KX --> OUT["Final Response"]
     Q --> OUT
     D --> OUT
-    M --> OUT
+    MX --> OUT
 ```
 
-详细设计见 [docs/architecture-deep-dive.md](./docs/architecture-deep-dive.md)。  
+当前主架构文档见 [docs/architecture-v2.md](./docs/architecture-v2.md)。  
+历史演进和 route-first 细节见 [docs/architecture-deep-dive.md](./docs/architecture-deep-dive.md)。  
 Shared memory schema 和 agent 权限矩阵见 [docs/shared-memory-design.md](./docs/shared-memory-design.md)。
 
 ## Shared Memory
@@ -70,6 +72,13 @@ Shared memory schema 和 agent 权限矩阵见 [docs/shared-memory-design.md](./
 - `read_only_ops` 写 `observations`
 - `diagnosis` 写 `hypotheses`
 - `mutation` 写 `plans / execution`
+
+## 测试
+
+当前测试分两层：
+
+- `tests/test_agent.py`：Ops vertical 的功能回归
+- `tests/kernel_contract/`：Kernel 框架契约，覆盖自定义 route / memory layer、审批门、实例隔离、动态 executor wiring
 
 ## 核心能力
 
@@ -239,13 +248,32 @@ ops-agent/
 ├── config/
 │   ├── __init__.py
 │   └── settings.py
+├── agent_kernel/
+│   ├── __init__.py
+│   ├── audit.py
+│   ├── planner.py
+│   ├── schemas.py
+│   ├── session.py
+│   └── tools/
+│       ├── __init__.py
+│       ├── mcp_gateway.py
+│       └── registry.py
+├── agent_ops/
+│   ├── __init__.py
+│   ├── agent.py
+│   ├── diagnosis.py
+│   ├── router.py
+│   └── topology.py
 ├── agent_core/
 │   ├── __init__.py
 │   ├── agent.py
 │   ├── audit.py
+│   ├── diagnosis.py
+│   ├── planner.py
 │   ├── router.py
 │   ├── schemas.py
-│   └── session.py
+│   ├── session.py
+│   └── topology.py
 ├── gateway/
 │   ├── __init__.py
 │   ├── app.py
@@ -271,13 +299,13 @@ ops-agent/
 ## 测试
 
 ```bash
-pytest -q
+python3 -m pytest -q
 ```
 
 静态检查：
 
 ```bash
-python -m py_compile $(rg --files -g '*.py')
+python3 -m py_compile $(rg --files -g '*.py')
 ```
 
 ## 已知限制
@@ -290,7 +318,19 @@ python -m py_compile $(rg --files -g '*.py')
 
 ## 下一步建议
 
+短期（把现有骨架做实）：
+
 - 把 shared memory 持久化到 Redis / DB
 - 把 diagnosis executor 显式拆成内部状态机
 - 给 mutation 增加 verification executor
 - 接入真正的 K8s / Jenkins 写操作和回读校验
+
+中长期（跨代追赶头部 vertical ops agent）：
+
+- 接入 MCP + tool retrieval，替换硬编码参数抽取
+- Router 升级为 planner，支持 graph 内回跳和混合意图
+- diagnosis 引入多假设并行验证
+- mutation 加入 dry-run 和风险分级审批
+- 建立 eval harness + incident case 反向沉淀
+
+完整差距分析和演进优先级见 [docs/architecture-deep-dive.md §8](./docs/architecture-deep-dive.md)。
