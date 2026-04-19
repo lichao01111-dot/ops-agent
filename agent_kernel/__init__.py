@@ -3,6 +3,7 @@ from agent_kernel.base_agent import AgentState, BaseAgent
 from agent_kernel.audit import AuditLogger, create_audit_logger
 from agent_kernel.executor import ExecutorBase, FunctionExecutor
 from agent_kernel.memory import DEFAULT_MEMORY_SCHEMA, MemoryBackend, MemorySchema
+from agent_kernel.patterns import MultiHypothesisExecutor
 from agent_kernel.planner import Planner
 from agent_kernel.router import RouterBase
 from agent_kernel.schemas import ChatRequest, ChatResponse
@@ -26,6 +27,7 @@ __all__ = [
     "MCPServerConfig",
     "MemoryBackend",
     "MemorySchema",
+    "MultiHypothesisExecutor",
     "Planner",
     "RouterBase",
     "SessionStore",
