@@ -6,7 +6,7 @@ from agent_ops.executors import (
     MutationExecutor,
     ReadOnlyOpsExecutor,
 )
-from agent_ops.memory import OPS_MEMORY_SCHEMA
+from agent_ops.memory_schema import OPS_MEMORY_SCHEMA
 from agent_ops.router import IntentRouter
 from agent_ops.topology import ServiceTopology, get_topology, load_topology_from_file, reload_topology
 from agent_kernel.audit import create_audit_logger

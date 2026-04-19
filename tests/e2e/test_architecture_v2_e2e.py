@@ -652,6 +652,48 @@ class TestC_PluginPoints:
         assert len(plan.steps) >= 2
         assert plan.steps[1].depends_on == [plan.steps[0].step_id]
 
+    @pytest.mark.asyncio
+    async def test_E2E_C07_planner_maybe_replan_override_appends_step(self):
+        """C07: A Vertical that overrides Planner._maybe_replan can append a
+        follow-up step after the initial plan would otherwise FINISH (§6 #5)."""
+
+        class ReplaningPlanner(Planner):
+            def __init__(self, router):
+                super().__init__(router=router)
+                self._already_replanned = False
+
+            def _maybe_replan(self, plan, last_step):
+                if self._already_replanned or last_step is None:
+                    return None
+                self._already_replanned = True
+                return PlanStep(
+                    step_id="step-followup",
+                    route="dummy_route",
+                    execution_target="executor:dummy_route",
+                    intent="followup",
+                    goal="auto-appended verification",
+                    risk_level=RiskLevel.LOW,
+                    status=PlanStepStatus.PENDING,
+                    depends_on=[last_step.step_id],
+                )
+
+        executor = DummyExecutor(final_message="ran")
+        agent = BaseAgent(
+            planner=ReplaningPlanner(router=DummyRouter()),
+            session_store=create_session_store(
+                memory_schema=MemorySchema(layers={"noop": {"system"}})
+            ),
+            audit_logger=create_audit_logger(),
+            executors=[executor],
+        )
+
+        response = await agent.chat(ChatRequest(message="initial", session_id="c07"))
+
+        # Initial step + replanned follow-up step both ran.
+        assert len(executor.invocations) == 2
+        # Final response message comes from the replanned step.
+        assert "auto-appended verification" in response.message
+
 
 # =============================================================================
 # Group D — Vertical isolation (§5.5)

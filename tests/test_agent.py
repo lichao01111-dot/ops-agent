@@ -19,10 +19,10 @@ from agent_kernel.schemas import (
 )
 from agent_kernel.session import InMemorySessionStore, create_session_store
 from agent_kernel.tools.registry import create_tool_registry
-from agent_ops.approval import OpsApprovalPolicy
+from agent_ops.risk_policy import OpsApprovalPolicy
 from agent_ops import create_ops_agent, create_ops_agent_streaming
 from agent_ops.agent import OpsAgent, OpsAgentStreaming
-from agent_ops.memory import OPS_MEMORY_SCHEMA
+from agent_ops.memory_schema import OPS_MEMORY_SCHEMA
 from agent_ops.router import IntentRouter
 from agent_ops.tool_setup import register_ops_builtins
 from agent_ops.schemas import (

@@ -27,7 +27,7 @@ from agent_kernel.executor import ExecutorBase
 from agent_kernel.schemas import ToolCallEvent
 from agent_kernel.session import SessionStore, create_session_store
 from agent_ops.extractors import extract_namespace, extract_pod_name, extract_service_name
-from agent_ops.memory import OPS_MEMORY_SCHEMA
+from agent_ops.memory_schema import OPS_MEMORY_SCHEMA
 from agent_ops.schemas import AgentIdentity, AgentRoute, Hypothesis, HypothesisVerdict, MemoryLayer
 from agent_ops.topology import ServiceTopology, get_topology
 

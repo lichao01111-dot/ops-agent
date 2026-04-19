@@ -162,16 +162,40 @@ class Planner:
         return PlanDecision.FINISH
 
     def _maybe_replan(self, plan: Plan, last_step: Optional[PlanStep]) -> PlanStep | None:
-        """Conservative replan: only trigger on well-defined hints.
+        """Vertical override point — append a follow-up step after the plan
+        would otherwise FINISH.
 
-        Current hooks:
-        - knowledge step that wrote `service` and the original request suggests
-          follow-up ops -> append a read_only_ops step. (Skipped in v1 to keep
-          tests deterministic; placeholder for future enhancement.)
-        - diagnosis step whose summary suggests a read-only re-check. (Also
-          skipped in v1.)
+        This is plugin point §6 #5 in architecture-v2. The Kernel's default
+        implementation always returns ``None`` (zero domain knowledge), so
+        plans terminate naturally once every PENDING step has run. Vertical
+        subclasses override this to encode domain-specific replan triggers,
+        e.g.:
 
-        Returning None means "no replan"; FINISH will be issued.
+            class OpsPlanner(Planner):
+                def _maybe_replan(self, plan, last_step):
+                    if (
+                        last_step
+                        and last_step.route == "diagnosis"
+                        and "verify" in last_step.result_summary.lower()
+                    ):
+                        return PlanStep(
+                            step_id=...,
+                            route="read_only_ops",
+                            execution_target="executor:read_only_ops",
+                            intent=...,
+                            goal="verify diagnosis",
+                            depends_on=[last_step.step_id],
+                        )
+                    return None
+
+        Contract:
+        - Return ``None`` for the common case (no follow-up needed).
+        - Returned ``PlanStep`` is appended to ``plan.steps`` and becomes the
+          new cursor; ``advance`` will issue ``REPLAN`` and the kernel routes
+          back through the planner node before dispatching it.
+        - Each replan still counts toward ``plan.max_iterations`` — it cannot
+          create an infinite loop.
+        - Must NOT mutate ``plan.steps`` directly; only return a new step.
         """
         return None
 

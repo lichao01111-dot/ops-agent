@@ -31,7 +31,7 @@ from agent_kernel.schemas import (
 from agent_kernel.session import SessionStore
 from agent_kernel.tools.mcp_gateway import MCPClient
 from agent_kernel.tools.registry import ToolRegistry
-from agent_ops.approval import OpsApprovalPolicy
+from agent_ops.risk_policy import OpsApprovalPolicy
 from agent_ops.executors import (
     DiagnosisExecutor,
     KnowledgeExecutor,
@@ -39,7 +39,7 @@ from agent_ops.executors import (
     ReadOnlyOpsExecutor,
 )
 from agent_ops.extractors import extract_namespace, extract_pod_name, extract_service_name
-from agent_ops.memory import OPS_MEMORY_SCHEMA
+from agent_ops.memory_schema import OPS_MEMORY_SCHEMA
 from agent_ops.planner import OpsPlanner
 from agent_ops.router import IntentRouter
 from agent_ops.topology import get_topology
