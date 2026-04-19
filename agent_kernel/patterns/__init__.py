@@ -8,9 +8,14 @@ and contain ZERO domain knowledge.
 
 See architecture-v2.md §5.3 / §6 #10 for the rationale.
 """
+from agent_kernel.patterns.approval_gate import ApprovalGateExecutor
 from agent_kernel.patterns.multi_hypothesis import (
     HypothesisProtocol,
     MultiHypothesisExecutor,
 )
 
-__all__ = ["HypothesisProtocol", "MultiHypothesisExecutor"]
+__all__ = [
+    "ApprovalGateExecutor",
+    "HypothesisProtocol",
+    "MultiHypothesisExecutor",
+]
