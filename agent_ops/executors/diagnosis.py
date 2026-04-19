@@ -174,6 +174,7 @@ class DiagnosisExecutor(ExecutorBase):
                 "diagnose_pod",
                 {"namespace": namespace, "pod_name": pod_name},
                 event_callback,
+                user_id=state["user_id"],
                 session_id=state["session_id"],
                 route=AgentRoute.DIAGNOSIS,
             )
@@ -184,6 +185,7 @@ class DiagnosisExecutor(ExecutorBase):
                 "get_pod_status",
                 {"namespace": namespace, "name_filter": service or hints.get("name_filter") or "", "show_all": False},
                 event_callback,
+                user_id=state["user_id"],
                 session_id=state["session_id"],
                 route=AgentRoute.DIAGNOSIS,
             )
@@ -195,6 +197,7 @@ class DiagnosisExecutor(ExecutorBase):
                 "search_logs",
                 {"service": service, "time_range_minutes": 30, "level": "ERROR", "limit": 20},
                 event_callback,
+                user_id=state["user_id"],
                 session_id=state["session_id"],
                 route=AgentRoute.DIAGNOSIS,
             )
@@ -320,6 +323,7 @@ class DiagnosisExecutor(ExecutorBase):
                     tool_name,
                     args,
                     event_callback,
+                    user_id=state["user_id"],
                     session_id=state["session_id"],
                     route=AgentRoute.DIAGNOSIS,
                 )

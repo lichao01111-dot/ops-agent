@@ -98,6 +98,7 @@ class ReadOnlyOpsExecutor(ExecutorBase):
                 tool_name,
                 args,
                 event_callback,
+                user_id=state["user_id"],
                 session_id=state["session_id"],
                 route=AgentRoute.READ_ONLY_OPS,
             )

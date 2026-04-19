@@ -62,6 +62,7 @@ class KnowledgeExecutor(ExecutorBase):
                 "index_documents",
                 {"docs_directory": docs_directory},
                 event_callback,
+                user_id=state["user_id"],
                 session_id=state["session_id"],
                 route=AgentRoute.MUTATION,
                 step=step,
@@ -85,6 +86,7 @@ class KnowledgeExecutor(ExecutorBase):
             "query_knowledge",
             {"question": message, "top_k": top_k},
             event_callback,
+            user_id=state["user_id"],
             session_id=state["session_id"],
             route=AgentRoute.KNOWLEDGE,
         )

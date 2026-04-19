@@ -358,8 +358,8 @@ class TestPlanner:
 
     @pytest.mark.asyncio
     async def test_initial_plan_single_intent(self):
-        from agent_kernel.planner import Planner
-        planner = Planner(router=IntentRouter())
+        from agent_ops.planner import OpsPlanner
+        planner = OpsPlanner(router=IntentRouter())
         plan = await planner.initial_plan(ChatRequest(message="测试环境 MySQL 地址"))
         assert len(plan.steps) == 1
         assert plan.steps[0].route == AgentRoute.KNOWLEDGE
@@ -369,8 +369,8 @@ class TestPlanner:
 
     @pytest.mark.asyncio
     async def test_initial_plan_compound_request(self):
-        from agent_kernel.planner import Planner
-        planner = Planner(router=IntentRouter())
+        from agent_ops.planner import OpsPlanner
+        planner = OpsPlanner(router=IntentRouter())
         plan = await planner.initial_plan(
             ChatRequest(message="先查一下 staging pod 状态，然后帮我重启 order-service")
         )
@@ -378,18 +378,26 @@ class TestPlanner:
         assert len(plan.steps) >= 2
         assert plan.steps[1].depends_on == [plan.steps[0].step_id]
 
-    def test_split_compound_heuristic(self):
-        from agent_kernel.planner import _split_compound
-        segments = _split_compound("先查 pod 状态，然后帮我重启 order-service")
+    def test_kernel_planner_does_not_split_by_default(self):
+        """Kernel Planner has no domain keywords — compound splitting is a
+        Vertical concern per architecture-v2 §11."""
+        from agent_kernel.planner import Planner
+        planner = Planner(router=IntentRouter())
+        segments = planner._split_compound("先查 pod 状态，然后帮我重启 order-service")
+        assert segments == ["先查 pod 状态，然后帮我重启 order-service"]
+
+    def test_ops_planner_splits_compound_heuristic(self):
+        from agent_ops.planner import split_compound_ops
+        segments = split_compound_ops("先查 pod 状态，然后帮我重启 order-service")
         assert len(segments) == 2
         assert "pod" in segments[0]
         assert "重启" in segments[1]
 
     @pytest.mark.asyncio
     async def test_advance_continues_when_pending_remains(self):
-        from agent_kernel.planner import Planner
+        from agent_ops.planner import OpsPlanner
         from agent_kernel.schemas import PlanDecision, PlanStepStatus
-        planner = Planner(router=IntentRouter())
+        planner = OpsPlanner(router=IntentRouter())
         plan = await planner.initial_plan(
             ChatRequest(message="先查 pod 状态，然后帮我重启 order-service")
         )
@@ -400,9 +408,9 @@ class TestPlanner:
 
     @pytest.mark.asyncio
     async def test_advance_finishes_single_step(self):
-        from agent_kernel.planner import Planner
+        from agent_ops.planner import OpsPlanner
         from agent_kernel.schemas import PlanDecision, PlanStepStatus
-        planner = Planner(router=IntentRouter())
+        planner = OpsPlanner(router=IntentRouter())
         plan = await planner.initial_plan(ChatRequest(message="MySQL 地址"))
         plan.steps[0].status = PlanStepStatus.SUCCEEDED
         decision = planner.advance(plan, last_step=plan.steps[0])
@@ -411,9 +419,9 @@ class TestPlanner:
 
     @pytest.mark.asyncio
     async def test_advance_fails_fast_on_failed_step(self):
-        from agent_kernel.planner import Planner
+        from agent_ops.planner import OpsPlanner
         from agent_kernel.schemas import PlanDecision, PlanStepStatus
-        planner = Planner(router=IntentRouter())
+        planner = OpsPlanner(router=IntentRouter())
         plan = await planner.initial_plan(
             ChatRequest(message="先查 pod 状态，然后帮我重启 order-service")
         )
@@ -540,7 +548,7 @@ class TestDiagnosisMemory:
     def test_hypothesis_memory_writes(self):
         """Verify DiagnosisExecutor._write_memory writes per-hypothesis entries,
         plus top_hypothesis_id / likely_root_cause / diagnosis_summary."""
-        from agent_ops.diagnosis import DiagnosisExecutor
+        from agent_ops.executors.diagnosis import DiagnosisExecutor
         from agent_ops.topology import ServiceTopology
         session_store = create_session_store(memory_schema=OPS_MEMORY_SCHEMA)
 
@@ -586,6 +594,7 @@ class TestAgentRuntimeContracts:
         agent.session_store = create_session_store(memory_schema=OPS_MEMORY_SCHEMA)
         agent.approval_policy = OpsApprovalPolicy()
         agent.tool_registry = create_tool_registry()
+        agent.audit_logger = create_audit_logger()
 
         captured = {}
 
@@ -615,6 +624,44 @@ class TestAgentRuntimeContracts:
         assert captured["args"] == {"value": 42}
         assert event.status == ToolCallStatus.SUCCESS
         assert json.loads(output)["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_invoke_tool_emits_audit_entry_with_sanitized_params(self):
+        agent = OpsAgent.__new__(OpsAgent)
+        agent.session_store = create_session_store(memory_schema=OPS_MEMORY_SCHEMA)
+        agent.approval_policy = OpsApprovalPolicy()
+        agent.tool_registry = create_tool_registry()
+        agent.audit_logger = create_audit_logger()
+
+        class FakeHandler:
+            async def ainvoke(self, args):
+                return json.dumps({"status": "ok"}, ensure_ascii=False)
+
+        original_entry = agent.tool_registry._entries.get("test_audit_tool")
+        try:
+            agent.tool_registry._entries["test_audit_tool"] = SimpleNamespace(
+                spec=SimpleNamespace(side_effect=False),
+                handler=FakeHandler(),
+            )
+            event, _ = await agent._invoke_tool(
+                "test_audit_tool",
+                {"api_token": "secret-value", "query": "mysql"},
+                user_id="alice",
+                session_id="audit-s1",
+                route=AgentRoute.KNOWLEDGE,
+            )
+        finally:
+            if original_entry is None:
+                agent.tool_registry._entries.pop("test_audit_tool", None)
+            else:
+                agent.tool_registry._entries["test_audit_tool"] = original_entry
+
+        assert event.status == ToolCallStatus.SUCCESS
+        entry = agent.audit_logger.get_recent(1)[0]
+        assert entry.user_id == "alice"
+        assert entry.tool_name == "test_audit_tool"
+        assert entry.params["api_token"] == "***REDACTED***"
+        assert entry.params["query"] == "mysql"
 
     @pytest.mark.asyncio
     async def test_chat_stream_emits_gateway_friendly_events(self):

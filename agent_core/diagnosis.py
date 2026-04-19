@@ -1,3 +1,3 @@
-from agent_ops.diagnosis import DiagnosisExecutor
+from agent_ops.executors.diagnosis import DiagnosisExecutor
 
 __all__ = ["DiagnosisExecutor"]

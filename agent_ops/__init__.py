@@ -1,6 +1,11 @@
 from agent_ops.tool_setup import BUILTIN_TOOL_META, register_ops_builtins
 from agent_ops.agent import OpsAgent, OpsAgentStreaming
-from agent_ops.diagnosis import DiagnosisExecutor
+from agent_ops.executors import (
+    DiagnosisExecutor,
+    KnowledgeExecutor,
+    MutationExecutor,
+    ReadOnlyOpsExecutor,
+)
 from agent_ops.memory import OPS_MEMORY_SCHEMA
 from agent_ops.router import IntentRouter
 from agent_ops.topology import ServiceTopology, get_topology, load_topology_from_file, reload_topology
@@ -41,8 +46,11 @@ __all__ = [
     "BUILTIN_TOOL_META",
     "DiagnosisExecutor",
     "IntentRouter",
+    "KnowledgeExecutor",
+    "MutationExecutor",
     "OpsAgent",
     "OpsAgentStreaming",
+    "ReadOnlyOpsExecutor",
     "ServiceTopology",
     "create_ops_agent",
     "create_ops_agent_streaming",

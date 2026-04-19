@@ -1,85 +1,97 @@
 """
-Planner for OpsAgent.
+Planner for the Agent Kernel.
 
-Replaces the one-shot ``IntentRouter`` with a planner that produces a ``Plan``
-consisting of one or more ``PlanStep``s. After each step executes, the planner
-decides to continue, replan (append new steps), or finish.
+Produces a ``Plan`` consisting of one or more ``PlanStep``s from a
+``ChatRequest``. After each step executes the planner decides CONTINUE /
+REPLAN / FINISH.
 
-Design goals:
-- Preserve single-intent latency: simple queries still produce a 1-step plan
-  via the keyword-based fast path (wrapping :class:`IntentRouter`).
-- Support genuine multi-intent requests (e.g. "check X, then restart it") by
-  splitting on explicit conjunctions.
-- Support replan: diagnosis steps can hint at follow-up read-only or mutation
-  steps without forcing the user to repeat themselves.
-- Keep plan state inside ``AgentState`` (LangGraph), not in shared memory.
+Extension points (architecture-v2 §6 #5):
+    - ``_split_compound(message) -> list[str]``
+        Default returns a single segment (no split). Vertical subclasses
+        override this to encode domain-specific compound request splitting
+        (Ops uses Chinese conjunction heuristics like "然后 / 接着"; CSM
+        might split on "退款 / 并且").
+    - ``_maybe_replan(plan, last_step) -> PlanStep | None``
+        Default returns None. Vertical subclasses append a follow-up step
+        here (e.g. diagnosis → read-only verification).
+
+Why subclass instead of injecting splitter/hook callables? Both pieces
+routinely need multiple Vertical-private helpers; subclassing keeps the
+extension surface cohesive and matches §11 ("_split_compound 做成 Vertical
+可覆写的 Planner 方法").
+
+Design invariants preserved:
+- Single-intent latency: one ``_split_compound`` segment → one Plan step.
+- max_iterations is a hard budget (§4.2).
+- FAILED step fail-fast by default.
+- Plan state lives in ``AgentState`` (LangGraph), not shared memory.
 """
 from __future__ import annotations
 
-import re
 import uuid
-from typing import Any, Optional
+from typing import Optional
 
 import structlog
 
 from agent_kernel.router import RouterBase
 from agent_kernel.schemas import (
     ChatRequest,
-    IntentTypeKey,
     Plan,
     PlanDecision,
     PlanStep,
     PlanStepStatus,
     RiskLevel,
     RouteDecision,
-    RouteKey,
 )
 
 logger = structlog.get_logger()
 
 
-# Simple conjunction heuristics for splitting compound requests. Kept minimal
-# on purpose — the LLM slow path handles anything tricky.
-_SPLIT_PATTERNS = [
-    re.compile(r"\s*然后\s*"),
-    re.compile(r"\s*接着\s*"),
-    re.compile(r"\s*再\s*(?=(?:帮|把|重|触|回|生|执))"),
-    re.compile(r"\s*并\s*(?=(?:帮|把|重|触|回|生|执))"),
-    re.compile(r"\s*,\s*然后\s*"),
-    re.compile(r"\s*，\s*然后\s*"),
-]
-
-
-def _split_compound(message: str) -> list[str]:
-    """Best-effort split of compound asks. Returns at most 3 segments."""
-    segments: list[str] = [message]
-    for pattern in _SPLIT_PATTERNS:
-        next_segments: list[str] = []
-        for segment in segments:
-            pieces = [piece.strip() for piece in pattern.split(segment) if piece and piece.strip()]
-            if pieces:
-                next_segments.extend(pieces)
-            else:
-                next_segments.append(segment)
-        segments = next_segments
-    # Filter duplicates while preserving order, cap at 3.
-    deduped: list[str] = []
-    for segment in segments:
-        if segment and segment not in deduped:
-            deduped.append(segment)
-        if len(deduped) >= 3:
-            break
-    return deduped
+MAX_COMPOUND_SEGMENTS = 3
 
 
 class Planner:
-    """Produce and advance multi-step plans."""
+    """Produce and advance multi-step plans.
+
+    Vertical agents that need compound-request splitting or replan logic
+    subclass this and override the protected hooks below.
+    """
 
     def __init__(self, router: RouterBase):
         self.router = router
 
+    # ----- Extension point: compound splitting -----
+
+    def _split_compound(self, message: str) -> list[str]:
+        """Split a compound user message into ordered sub-asks.
+
+        Default implementation returns ``[message]`` unchanged — the Kernel
+        is domain-agnostic and must not guess at Chinese / English
+        conjunction heuristics. Vertical subclasses override this; see
+        ``agent_ops.planner.OpsPlanner`` for the Ops implementation.
+
+        Contract:
+            - Return at least one non-empty segment.
+            - Preserve input order.
+            - Should cap length at :data:`MAX_COMPOUND_SEGMENTS`; subclasses
+              can reuse :meth:`_dedupe_segments` as a helper.
+        """
+        return [message]
+
+    @staticmethod
+    def _dedupe_segments(segments: list[str], limit: int = MAX_COMPOUND_SEGMENTS) -> list[str]:
+        """Utility for subclasses: filter empties, dedupe, cap at *limit*."""
+        deduped: list[str] = []
+        for segment in segments:
+            segment = segment.strip() if segment else ""
+            if segment and segment not in deduped:
+                deduped.append(segment)
+            if len(deduped) >= limit:
+                break
+        return deduped
+
     async def initial_plan(self, request: ChatRequest) -> Plan:
-        segments = _split_compound(request.message)
+        segments = self._split_compound(request.message)
         steps: list[PlanStep] = []
 
         if len(segments) <= 1:
