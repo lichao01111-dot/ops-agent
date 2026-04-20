@@ -39,7 +39,7 @@ from agent_ops.executors import (
     ReadOnlyOpsExecutor,
 )
 from agent_ops.extractors import extract_namespace, extract_pod_name, extract_service_name
-from agent_ops.memory_schema import OPS_MEMORY_SCHEMA
+from agent_ops.formatters import load_json, truncate_text
 from agent_ops.planner import OpsPlanner
 from agent_ops.router import IntentRouter
 from agent_ops.topology import get_topology
@@ -68,7 +68,7 @@ class OpsAgent(BaseAgent):
         self.planner = OpsPlanner(router=self.router)
         self.approval_policy = OpsApprovalPolicy()
         self.topology = get_topology()
-        
+
         # Instantiate executors
         self.knowledge_executor = KnowledgeExecutor(
             invoke_tool=self._invoke_tool,
@@ -316,17 +316,8 @@ class OpsAgent(BaseAgent):
             return f"job={payload.get('job_name')} result={payload.get('result')}"
         return self._truncate_text(json.dumps(payload, ensure_ascii=False), 120)
 
-    def _load_json(self, output: str) -> dict[str, Any]:
-        try:
-            payload = json.loads(output)
-            return payload if isinstance(payload, dict) else {}
-        except Exception:
-            return {}
-
-    def _truncate_text(self, text: str, limit: int) -> str:
-        if len(text) <= limit:
-            return text
-        return text[:limit] + "...(truncated)"
+    _load_json = staticmethod(load_json)
+    _truncate_text = staticmethod(truncate_text)
 
     def _build_diagnosis_hints(self, state: dict[str, Any], goal: str) -> dict[str, Any]:
         session_id = state.get("session_id", "")

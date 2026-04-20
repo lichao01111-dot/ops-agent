@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Knowledge Admin</title>
+  <style>
+    :root {
+      --bg: #f5f1e8;
+      --panel: #fff;
+      --soft: #fbfaf7;
+      --ink: #1c2732;
+      --muted: #68737b;
+      --line: #d8d7d1;
+      --blue: #1d4f7a;
+      --green: #157b66;
+      --orange: #d48d21;
+      --red: #d56255;
+      --shadow: 0 14px 40px rgba(18, 24, 30, 0.06);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at top left, #ece4d5 0, #ece4d500 18rem),
+        radial-gradient(circle at top right, #dce9f6 0, #dce9f600 18rem),
+        var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .wrap { max-width: 1220px; margin: 0 auto; padding: 28px 18px 36px; }
+    .hero { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; margin-bottom:18px; }
+    h1 { margin:0 0 8px; font-size:40px; line-height:1.06; letter-spacing:-0.03em; }
+    .sub { margin:0; color:var(--muted); line-height:1.6; max-width:760px; }
+    .top-links { display:flex; gap:10px; flex-wrap:wrap; }
+    .link-pill, .status-pill {
+      display:inline-flex; align-items:center; gap:8px; padding:9px 14px; border-radius:999px;
+      background:#fff; border:1px solid var(--line); text-decoration:none; color:var(--ink); font-size:13px; font-weight:700;
+      box-shadow:var(--shadow);
+    }
+    .status-pill.ok { color:var(--green); background:#e8f4ef; }
+    .status-pill.warn { color:var(--orange); background:#f8f0dd; }
+    .status-pill.bad { color:var(--red); background:#f8e7e4; }
+    .layout { display:grid; grid-template-columns: 400px 1fr; gap:18px; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:18px; box-shadow:var(--shadow); overflow:hidden; }
+    .card-head { padding:16px 18px 12px; border-bottom:1px solid var(--line); background:linear-gradient(180deg,#fff,#fbfaf7); }
+    .card-head h2 { margin:0 0 4px; font-size:20px; }
+    .card-head p { margin:0; font-size:13px; color:var(--muted); line-height:1.5; }
+    .card-body { padding:18px; }
+    label { display:block; margin:0 0 7px; font-size:12px; font-weight:700; color:var(--muted); text-transform:uppercase; }
+    input, textarea, button { width:100%; font:inherit; }
+    input, textarea {
+      border:1px solid var(--line); border-radius:12px; background:#fff; color:var(--ink); padding:11px 13px;
+    }
+    textarea { min-height:72px; resize:vertical; line-height:1.55; }
+    .field { margin-bottom:14px; }
+    .dropzone {
+      border:2px dashed var(--line); border-radius:14px; padding:18px; text-align:center;
+      background:var(--soft); color:var(--muted);
+    }
+    .dropzone strong { color:var(--ink); display:block; margin-bottom:8px; }
+    .file-list { margin-top:12px; display:flex; flex-direction:column; gap:8px; }
+    .file-item { border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#fff; font-size:13px; }
+    .btn-row { display:flex; gap:10px; margin-top:16px; }
+    button { border:0; border-radius:12px; padding:12px 14px; font-weight:700; cursor:pointer; }
+    .primary { background:var(--blue); color:#fff; }
+    .secondary { background:var(--green); color:#fff; }
+    .ghost { background:#edf1f4; color:var(--ink); }
+    .pipeline { display:grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap:10px; }
+    .stage { border:1px solid var(--line); border-radius:14px; background:var(--soft); padding:12px; min-height:94px; }
+    .stage .name { font-size:13px; font-weight:800; margin-bottom:6px; }
+    .stage .desc { font-size:12px; color:var(--muted); line-height:1.5; }
+    .stage.ok { border-color:#bcd6ce; background:#edf8f4; }
+    .stage.run { border-color:#e9cf9d; background:#fcf5e7; }
+    .stats-grid { display:grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap:10px; }
+    .stat { border:1px solid var(--line); border-radius:14px; background:var(--soft); padding:12px 14px; }
+    .stat .label { font-size:11px; text-transform:uppercase; color:var(--muted); font-weight:700; margin-bottom:6px; }
+    .stat .value { font-size:24px; font-weight:800; }
+    .table { width:100%; border-collapse:collapse; font-size:13px; }
+    .table th, .table td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+    .table th { color:var(--muted); font-size:12px; text-transform:uppercase; }
+    .log {
+      margin-top:14px; background:#111822; color:#d6dde5; border-radius:14px; padding:14px; min-height:120px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; white-space:pre-wrap; line-height:1.6;
+    }
+    .hint { margin-top:14px; border-radius:12px; background:#f8f0dd; color:#65573c; padding:12px 14px; font-size:13px; line-height:1.65; }
+    @media (max-width: 960px) {
+      .layout { grid-template-columns: 1fr; }
+      .pipeline, .stats-grid { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 640px) {
+      .hero { flex-direction:column; }
+      .btn-row { flex-direction:column; }
+      .pipeline, .stats-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <div>
+        <h1>Knowledge Admin</h1>
+        <p class="sub">把资料通过一条明确的 pipeline 放进知识库：上传文件 -> 解析文本 -> 分块 -> 向量化 -> 写入 PostgreSQL。适合运营资料、架构文档、SOP、排障手册的持续入库。</p>
+      </div>
+      <div class="top-links">
+        <a class="link-pill" href="/">返回 Playground</a>
+        <div class="status-pill" id="health-pill">服务状态检测中</div>
+      </div>
+    </div>
+
+    <div class="layout">
+      <div class="card">
+        <div class="card-head">
+          <h2>上传资料</h2>
+          <p>支持 `.md` `.txt` `.pdf` `.json` `.html` `.csv` 等文件。</p>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <label for="file-input">文件</label>
+            <div class="dropzone">
+              <strong>选择资料文件</strong>
+              <div>点击下方按钮选择后，走完整 pipeline 入库。</div>
+            </div>
+            <input id="file-input" type="file" multiple style="margin-top:12px" />
+            <div class="file-list" id="file-list"></div>
+          </div>
+
+          <div class="field">
+            <label for="directory-input">或导入服务器目录</label>
+            <input id="directory-input" value="./docs" />
+          </div>
+
+          <div class="btn-row">
+            <button class="primary" id="btn-upload">上传并入库</button>
+            <button class="secondary" id="btn-index-dir">导入目录</button>
+            <button class="ghost" id="btn-refresh">刷新统计</button>
+          </div>
+
+          <div class="hint">
+            当前 pipeline 是同步执行的，所以适合中小批量资料。<br />
+            如果后面资料量很大，可以再把这条链路拆成异步 job + 队列。
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:18px">
+        <div class="card">
+          <div class="card-head">
+            <h2>Pipeline</h2>
+            <p>看每一步有没有跑通。</p>
+          </div>
+          <div class="card-body">
+            <div class="pipeline" id="pipeline">
+              <div class="stage"><div class="name">1. 读取文件</div><div class="desc">把上传或目录资料读入后端。</div></div>
+              <div class="stage"><div class="name">2. 解析文本</div><div class="desc">按文件类型提取可检索文本。</div></div>
+              <div class="stage"><div class="name">3. 分块</div><div class="desc">切成检索友好的 chunk。</div></div>
+              <div class="stage"><div class="name">4. 向量化</div><div class="desc">调用正式 embedding 接口。</div></div>
+              <div class="stage"><div class="name">5. 写入 PG</div><div class="desc">存入 PostgreSQL + pgvector。</div></div>
+            </div>
+            <div class="log" id="log">等待操作...</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>知识库统计</h2>
+            <p>当前库里已经有多少文档、多少 chunk。</p>
+          </div>
+          <div class="card-body">
+            <div class="stats-grid">
+              <div class="stat"><div class="label">Backend</div><div class="value" id="stat-backend">-</div></div>
+              <div class="stat"><div class="label">Documents</div><div class="value" id="stat-docs">-</div></div>
+              <div class="stat"><div class="label">Chunks</div><div class="value" id="stat-chunks">-</div></div>
+              <div class="stat"><div class="label">Embedding</div><div class="value" id="stat-embedding" style="font-size:15px;line-height:1.5">-</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>检索验证</h2>
+            <p>上传完后，直接在这里测试召回效果。</p>
+          </div>
+          <div class="card-body">
+            <div class="field">
+              <label for="search-query">测试问题</label>
+              <textarea id="search-query">staging 环境的 Kafka 地址是什么？</textarea>
+            </div>
+            <div class="btn-row" style="margin-top:0">
+              <button class="ghost" id="btn-search">测试检索</button>
+            </div>
+            <div class="log" id="search-log">等待检索...</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>最近入库文档</h2>
+            <p>用于确认上传结果和 chunk 数。</p>
+          </div>
+          <div class="card-body">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Source</th>
+                  <th>Type</th>
+                  <th>Chunks</th>
+                  <th>Updated</th>
+                </tr>
+              </thead>
+              <tbody id="documents-body">
+                <tr><td colspan="4" style="color:#68737b">加载中...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const stageEls = () => Array.from(document.querySelectorAll(".stage"));
+
+    function setHealth(text, kind = "") {
+      const el = $("health-pill");
+      el.textContent = text;
+      el.className = "status-pill";
+      if (kind) el.classList.add(kind);
+    }
+
+    function setLog(text) {
+      $("log").textContent = text;
+    }
+
+    function resetStages() {
+      stageEls().forEach((el) => { el.classList.remove("ok", "run"); });
+    }
+
+    function setStage(index, state, detail = "") {
+      const el = stageEls()[index];
+      if (!el) return;
+      el.classList.remove("ok", "run");
+      if (state) el.classList.add(state);
+      if (detail) {
+        const desc = el.querySelector(".desc");
+        if (desc) desc.textContent = detail;
+      }
+    }
+
+    function applyPipeline(report = []) {
+      const stageMap = ["read", "parse", "split", "embed", "store"];
+      stageMap.forEach((name, index) => {
+        const item = report.find((entry) => entry.stage === name);
+        if (!item) return;
+        const state = item.status === "completed" ? "ok" : item.status === "running" ? "run" : "";
+        setStage(index, state, item.message || "");
+      });
+    }
+
+    function renderFiles() {
+      const files = Array.from($("file-input").files || []);
+      const list = $("file-list");
+      if (!files.length) {
+        list.innerHTML = "";
+        return;
+      }
+      list.innerHTML = files.map((file) => `<div class="file-item">${file.name} · ${Math.round(file.size / 1024)} KB</div>`).join("");
+    }
+
+    async function refreshHealth() {
+      try {
+        const res = await fetch("/health");
+        const data = await res.json();
+        if (data.status === "healthy" && data.agent) setHealth("服务正常", "ok");
+        else setHealth("服务已起但 agent 未就绪", "warn");
+      } catch {
+        setHealth("服务不可达", "bad");
+      }
+    }
+
+    async function refreshStats() {
+      const res = await fetch("/api/knowledge/stats");
+      const data = await res.json();
+      $("stat-backend").textContent = data.schema ? `${data.backend || "-"} / ${data.schema}` : (data.backend || "-");
+      $("stat-docs").textContent = data.document_count ?? "-";
+      $("stat-chunks").textContent = data.chunk_count ?? "-";
+      const dims = data.embedding_dimensions ? ` · ${data.embedding_dimensions}d` : "";
+      $("stat-embedding").textContent = `${data.embedding_provider || "-"}\n${data.embedding_model || "-"}${dims}`;
+    }
+
+    async function refreshDocuments() {
+      const res = await fetch("/api/knowledge/documents?limit=20");
+      const data = await res.json();
+      const body = $("documents-body");
+      const docs = data.documents || [];
+      if (!docs.length) {
+        body.innerHTML = `<tr><td colspan="4" style="color:#68737b">还没有文档。</td></tr>`;
+        return;
+      }
+      body.innerHTML = docs.map((doc) => `
+        <tr>
+          <td>${doc.source_name || "-"}</td>
+          <td>${doc.source_type || "-"}</td>
+          <td>${doc.chunk_count ?? "-"}</td>
+          <td>${doc.updated_at || "-"}</td>
+        </tr>
+      `).join("");
+    }
+
+    async function refreshAll() {
+      await Promise.all([refreshHealth(), refreshStats(), refreshDocuments()]);
+    }
+
+    async function uploadFiles() {
+      const files = Array.from($("file-input").files || []);
+      if (!files.length) {
+        setLog("请先选择文件。");
+        return;
+      }
+      resetStages();
+      setStage(0, "run");
+      setLog("开始上传文件...");
+
+      const form = new FormData();
+      files.forEach((file) => form.append("files", file));
+
+      try {
+        setStage(1, "run");
+        setStage(2, "run");
+        setStage(3, "run");
+        setStage(4, "run");
+
+        const res = await fetch("/api/knowledge/upload", { method: "POST", body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(JSON.stringify(data));
+
+        applyPipeline(data.pipeline || []);
+        setLog(JSON.stringify(data, null, 2));
+        await refreshStats();
+        await refreshDocuments();
+      } catch (err) {
+        setLog(String(err));
+      }
+    }
+
+    async function indexDirectory() {
+      const value = $("directory-input").value.trim();
+      if (!value) {
+        setLog("请先填写目录。");
+        return;
+      }
+      resetStages();
+      setStage(0, "run");
+      setStage(1, "run");
+      setStage(2, "run");
+      setStage(3, "run");
+      setStage(4, "run");
+      setLog(`开始导入目录: ${value}`);
+
+      const form = new FormData();
+      form.append("docs_directory", value);
+
+      try {
+        const res = await fetch("/api/knowledge/index-directory", { method: "POST", body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(JSON.stringify(data));
+
+        applyPipeline(data.pipeline || []);
+        setLog(JSON.stringify(data, null, 2));
+        await refreshStats();
+        await refreshDocuments();
+      } catch (err) {
+        setLog(String(err));
+      }
+    }
+
+    async function testSearch() {
+      const query = $("search-query").value.trim();
+      if (!query) {
+        $("search-log").textContent = "请先输入测试问题。";
+        return;
+      }
+
+      $("search-log").textContent = "正在检索...";
+      try {
+        const params = new URLSearchParams({ query, top_k: "5" });
+        const res = await fetch(`/api/knowledge/search?${params.toString()}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(JSON.stringify(data));
+        $("search-log").textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        $("search-log").textContent = String(err);
+      }
+    }
+
+    $("file-input").addEventListener("change", renderFiles);
+    $("btn-upload").addEventListener("click", uploadFiles);
+    $("btn-index-dir").addEventListener("click", indexDirectory);
+    $("btn-refresh").addEventListener("click", refreshAll);
+    $("btn-search").addEventListener("click", testSearch);
+
+    refreshAll();
+  </script>
+</body>
+</html>

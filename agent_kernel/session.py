@@ -49,7 +49,7 @@ class SharedMemory(MemoryBackend):
             layer: {} for layer in memory_schema.layers()
         }
         self._schema = memory_schema
-        
+
     def get_layer(self, layer: MemoryLayerKey) -> dict[str, MemoryItem]:
         if layer not in self._layers:
             self._layers[layer] = {}

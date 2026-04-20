@@ -83,7 +83,7 @@ class ReadOnlyOpsExecutor(ExecutorBase):
     async def execute(self, state: dict[str, Any], event_callback: Callable | None = None) -> dict[str, Any]:
         message = self._get_latest_user_message(state["messages"])
         plan = self._plan_read_only_tool(message, state["context"], state["session_id"])
-        
+
         if not plan:
             return {
                 "final_message": "我没有从请求里识别出明确的只读查询目标。请补充服务名、namespace、构建编号或日志范围。",

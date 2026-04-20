@@ -147,8 +147,8 @@ class MutationExecutor(ExecutorBase):
             approval_receipt_id=receipt.receipt_id if receipt else "",
         )
         final_message = format_mutation_execution(
-            pipeline_plan, 
-            output, 
+            pipeline_plan,
+            output,
             receipt.receipt_id if receipt else ""
         )
         return {"final_message": final_message, "tool_calls": [event], "sources": []}

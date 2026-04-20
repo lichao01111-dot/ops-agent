@@ -110,6 +110,11 @@ pip install -e ".[dev]"
 cp .env.example .env
 ```
 
+默认本地 Docker 端口：
+
+- PostgreSQL: `localhost:5433`
+- Redis: `localhost:6380`
+
 至少配置一组可用的 LLM 凭据：
 
 ```bash
@@ -138,7 +143,9 @@ ANTHROPIC_API_KEY=sk-ant-xxx
 
 - `K8S_ALLOWED_NAMESPACES`
 - `K8S_READONLY_NAMESPACES`
-- `CHROMA_PERSIST_DIR`
+- `KNOWLEDGE_PG_DSN`
+- `EMBEDDING_PROVIDER`
+- `EMBEDDING_MODEL`
 - `REDIS_URL`
 - `SERVER_HOST`
 - `SERVER_PORT`
@@ -158,7 +165,7 @@ python main.py
 或：
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 ### 5. 交互式调试

@@ -30,7 +30,7 @@ class MemorySchema:
             for writer, layer_set in self._write_permissions.items():
                 for layer in layer_set:
                     self._layer_writers.setdefault(layer, set()).add(writer)
-        
+
     def layers(self) -> set[MemoryLayerKey]:
         return set(self._layer_writers)
 

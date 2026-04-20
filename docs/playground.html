@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpsAgent Playground</title>
+  <style>
+    :root {
+      --bg: #f5f1e8;
+      --panel: #ffffff;
+      --panel-soft: #fbfaf7;
+      --ink: #1c2732;
+      --muted: #68737b;
+      --line: #d8d7d1;
+      --blue: #1d4f7a;
+      --green: #157b66;
+      --orange: #d48d21;
+      --red: #d56255;
+      --blue-soft: #e7f0f8;
+      --green-soft: #e7f4f0;
+      --orange-soft: #f7f0e0;
+      --red-soft: #f8e8e5;
+      --shadow: 0 14px 40px rgba(18, 24, 30, 0.06);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at top left, #ece4d5 0, #ece4d500 18rem),
+        radial-gradient(circle at top right, #dce9f6 0, #dce9f600 18rem),
+        var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .wrap {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 28px 18px 36px;
+    }
+
+    .hero {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .hero h1 {
+      margin: 0 0 8px;
+      font-size: 42px;
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.6;
+      max-width: 720px;
+    }
+
+    .hero-meta {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border-radius: 999px;
+      padding: 9px 14px;
+      font-size: 13px;
+      font-weight: 700;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      color: var(--ink);
+    }
+
+    .pill.ok { color: var(--green); background: var(--green-soft); }
+    .pill.warn { color: var(--orange); background: var(--orange-soft); }
+    .pill.bad { color: var(--red); background: var(--red-soft); }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 360px minmax(0, 1fr);
+      gap: 18px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .card-head {
+      padding: 16px 18px 12px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, #ffffff, #fbfaf7);
+    }
+
+    .card-head h2 {
+      margin: 0 0 4px;
+      font-size: 20px;
+    }
+
+    .card-head p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .card-body {
+      padding: 18px;
+    }
+
+    label {
+      display: block;
+      margin: 0 0 7px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    input, select, textarea, button {
+      width: 100%;
+      font: inherit;
+    }
+
+    input, select, textarea {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 11px 13px;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+      line-height: 1.55;
+    }
+
+    .field { margin-bottom: 14px; }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .quick-prompts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .chip {
+      border: 1px solid var(--line);
+      background: var(--panel-soft);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 12px;
+      color: var(--ink);
+      cursor: pointer;
+      width: auto;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 120ms ease, opacity 120ms ease;
+    }
+
+    button:hover { transform: translateY(-1px); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+
+    .primary { background: var(--blue); color: #fff; }
+    .secondary { background: var(--green); color: #fff; }
+    .ghost { background: #edf1f4; color: var(--ink); }
+
+    .hint {
+      margin-top: 16px;
+      border-radius: 12px;
+      background: var(--orange-soft);
+      color: #65573c;
+      padding: 12px 14px;
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .conversation {
+      display: flex;
+      flex-direction: column;
+      min-height: 640px;
+    }
+
+    .conversation-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 18px 12px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, #ffffff, #fbfaf7);
+    }
+
+    .conversation-head h2 {
+      margin: 0 0 4px;
+      font-size: 20px;
+    }
+
+    .conversation-head p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .chat-log {
+      flex: 1;
+      padding: 18px;
+      background: linear-gradient(180deg, #fff, #fcfbf8);
+      min-height: 330px;
+    }
+
+    .message {
+      display: flex;
+      margin-bottom: 14px;
+    }
+
+    .message.user { justify-content: flex-end; }
+
+    .bubble {
+      max-width: min(80%, 760px);
+      border-radius: 16px;
+      padding: 13px 15px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      word-break: break-word;
+      border: 1px solid var(--line);
+      box-shadow: 0 4px 16px rgba(18, 24, 30, 0.04);
+    }
+
+    .user .bubble {
+      background: var(--blue);
+      color: #fff;
+      border-color: transparent;
+    }
+
+    .assistant .bubble {
+      background: #fff;
+      color: var(--ink);
+    }
+
+    .assistant .bubble.soft {
+      background: var(--panel-soft);
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      padding: 0 18px 18px;
+    }
+
+    .meta-box {
+      border-radius: 14px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      background: var(--panel-soft);
+    }
+
+    .meta-box .label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    .meta-box .value {
+      font-size: 14px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .tools-panel,
+    .events-panel {
+      border-top: 1px solid var(--line);
+      padding: 16px 18px 18px;
+      background: #fff;
+    }
+
+    .section-title {
+      margin: 0 0 10px;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .tools-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .tool-tag {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 7px 10px;
+      background: var(--blue-soft);
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .events {
+      max-height: 250px;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .event {
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: var(--orange-soft);
+      border-left: 4px solid var(--orange);
+    }
+
+    .event-name {
+      font-size: 11px;
+      font-weight: 800;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.55;
+      font-size: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 14px;
+      padding: 18px;
+      border: 1px dashed var(--line);
+      border-radius: 14px;
+      background: var(--panel-soft);
+    }
+
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .meta-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .hero {
+        flex-direction: column;
+      }
+
+      .row,
+      .meta-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .btn-row {
+        flex-direction: column;
+      }
+
+      .bubble {
+        max-width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <div>
+        <h1>OpsAgent Playground</h1>
+        <p>直接在浏览器里测试 <code>/api/chat</code> 和 <code>/api/chat/stream</code>。适合先验证知识问答，再逐步测试运维查询和审批类流程。</p>
+      </div>
+      <div class="hero-meta">
+        <a class="pill" href="/knowledge-admin" style="text-decoration:none">知识库管理页</a>
+        <div class="pill" id="health-pill">服务状态检测中</div>
+        <div class="pill" id="tools-pill">工具列表加载中</div>
+      </div>
+    </div>
+
+    <div class="layout">
+      <div class="card">
+        <div class="card-head">
+          <h2>请求参数</h2>
+          <p>先改问题，再选普通调用或流式调用。</p>
+        </div>
+        <div class="card-body">
+          <div class="field">
+            <label for="message">问题</label>
+            <textarea id="message">OpsAgent 现在有哪 4 类 route？</textarea>
+            <div class="quick-prompts">
+              <button class="chip" data-prompt="OpsAgent 现在有哪 4 类 route？">知识问答</button>
+              <button class="chip" data-prompt="Kernel 和 OpsAgent 分别负责什么？">架构说明</button>
+              <button class="chip" data-prompt="查一下 staging 的 order-service pod 状态">运维查询</button>
+              <button class="chip" data-prompt="帮我重启 staging 的 order-service">审批场景</button>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label for="user_id">User ID</label>
+              <input id="user_id" value="demo@company.com" />
+            </div>
+            <div class="field">
+              <label for="session_id">Session ID</label>
+              <input id="session_id" value="playground-session" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="user_role">User Role</label>
+            <select id="user_role">
+              <option value="viewer">viewer</option>
+              <option value="operator">operator</option>
+              <option value="admin">admin</option>
+            </select>
+          </div>
+
+          <div class="btn-row">
+            <button class="primary" id="btn-chat">普通调用</button>
+            <button class="secondary" id="btn-stream">流式调用</button>
+            <button class="ghost" id="btn-clear">清空</button>
+          </div>
+
+          <div class="hint">
+            当前最稳的是知识类问题，因为我已经帮你把 <code>docs/</code> 索引进知识库了。<br />
+            K8s / Jenkins 这类请求如果没有配置外部环境，页面会如实返回“未配置”错误，这反而有助于你排查接入状态。
+          </div>
+        </div>
+      </div>
+
+      <div class="card conversation">
+        <div class="conversation-head">
+          <div>
+            <h2>会话结果</h2>
+            <p id="status-text">等待请求</p>
+          </div>
+          <div class="pill" id="mode-pill">待机</div>
+        </div>
+
+        <div class="chat-log" id="chat-log">
+          <div class="empty">点左侧按钮后，这里会按聊天气泡展示你的问题和返回结果。</div>
+        </div>
+
+        <div class="meta-grid">
+          <div class="meta-box">
+            <div class="label">Route</div>
+            <div class="value" id="meta-route">-</div>
+          </div>
+          <div class="meta-box">
+            <div class="label">Intent</div>
+            <div class="value" id="meta-intent">-</div>
+          </div>
+          <div class="meta-box">
+            <div class="label">Risk</div>
+            <div class="value" id="meta-risk">-</div>
+          </div>
+          <div class="meta-box">
+            <div class="label">Approval</div>
+            <div class="value" id="meta-approval">-</div>
+          </div>
+        </div>
+
+        <div class="tools-panel">
+          <div class="section-title">本次工具调用</div>
+          <div class="tools-list" id="tool-calls">
+            <div class="empty" style="width:100%">还没有工具调用。</div>
+          </div>
+        </div>
+
+        <div class="events-panel">
+          <div class="section-title">流式事件</div>
+          <div class="events" id="events">
+            <div class="empty">流式调用时，这里会显示 route、tool_call、tool_result、done 等事件。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let isRunning = false;
+
+    function payload() {
+      return {
+        message: $("message").value.trim(),
+        user_id: $("user_id").value.trim() || "demo@company.com",
+        session_id: $("session_id").value.trim() || "playground-session",
+        user_role: $("user_role").value,
+        context: {}
+      };
+    }
+
+    function setStatus(text, mode = "待机", kind = "normal") {
+      $("status-text").textContent = text;
+      const pill = $("mode-pill");
+      pill.textContent = mode;
+      pill.className = "pill";
+      if (kind === "ok") pill.classList.add("ok");
+      if (kind === "warn") pill.classList.add("warn");
+      if (kind === "bad") pill.classList.add("bad");
+    }
+
+    function setHealth(text, kind = "ok") {
+      const pill = $("health-pill");
+      pill.textContent = text;
+      pill.className = "pill";
+      if (kind) pill.classList.add(kind);
+    }
+
+    function setToolsSummary(text) {
+      $("tools-pill").textContent = text;
+    }
+
+    function clearMeta() {
+      $("meta-route").textContent = "-";
+      $("meta-intent").textContent = "-";
+      $("meta-risk").textContent = "-";
+      $("meta-approval").textContent = "-";
+      $("tool-calls").innerHTML = '<div class="empty" style="width:100%">还没有工具调用。</div>';
+      $("events").innerHTML = '<div class="empty">流式调用时，这里会显示 route、tool_call、tool_result、done 等事件。</div>';
+    }
+
+    function resetConversation() {
+      $("chat-log").innerHTML = "";
+      clearMeta();
+    }
+
+    function addMessage(role, text, soft = false) {
+      const log = $("chat-log");
+      if (log.querySelector(".empty")) log.innerHTML = "";
+
+      const row = document.createElement("div");
+      row.className = `message ${role}`;
+
+      const bubble = document.createElement("div");
+      bubble.className = `bubble ${role === "assistant" && soft ? "soft" : ""}`;
+      bubble.textContent = text;
+
+      row.appendChild(bubble);
+      log.appendChild(row);
+      log.scrollTop = log.scrollHeight;
+      return bubble;
+    }
+
+    function setToolCalls(toolCalls) {
+      const el = $("tool-calls");
+      el.innerHTML = "";
+      if (!toolCalls || !toolCalls.length) {
+        el.innerHTML = '<div class="empty" style="width:100%">这次没有工具调用。</div>';
+        return;
+      }
+      toolCalls.forEach((call) => {
+        const tag = document.createElement("div");
+        tag.className = "tool-tag";
+        tag.textContent = `${call.tool_name || call.tool || "tool"} · ${call.status || "running"}`;
+        el.appendChild(tag);
+      });
+    }
+
+    function setMeta(data = {}) {
+      $("meta-route").textContent = data.route || "-";
+      $("meta-intent").textContent = data.intent || "-";
+      $("meta-risk").textContent = data.risk_level || "-";
+      $("meta-approval").textContent = data.needs_approval === true ? "需要" : data.needs_approval === false ? "不需要" : "-";
+      if (data.tool_calls) setToolCalls(data.tool_calls);
+    }
+
+    function appendEvent(name, data) {
+      const el = $("events");
+      if (el.querySelector(".empty")) el.innerHTML = "";
+
+      const box = document.createElement("div");
+      box.className = "event";
+
+      const title = document.createElement("div");
+      title.className = "event-name";
+      title.textContent = name;
+
+      const body = document.createElement("pre");
+      body.textContent = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+
+      box.appendChild(title);
+      box.appendChild(body);
+      el.prepend(box);
+    }
+
+    function setRunning(running) {
+      isRunning = running;
+      $("btn-chat").disabled = running;
+      $("btn-stream").disabled = running;
+      $("btn-clear").disabled = running;
+    }
+
+    async function refreshHealth() {
+      try {
+        const res = await fetch("/health");
+        const data = await res.json();
+        if (data.status === "healthy" && data.agent) {
+          setHealth("服务正常", "ok");
+        } else {
+          setHealth("服务已起但 agent 未就绪", "warn");
+        }
+      } catch {
+        setHealth("服务不可达", "bad");
+      }
+    }
+
+    async function refreshTools() {
+      try {
+        const res = await fetch("/api/tools");
+        const data = await res.json();
+        setToolsSummary(`已加载 ${data.tools?.length || 0} 个工具`);
+      } catch {
+        setToolsSummary("工具列表读取失败");
+      }
+    }
+
+    async function callChat() {
+      if (isRunning) return;
+      resetConversation();
+      setRunning(true);
+      setStatus("普通调用中...", "普通调用", "warn");
+
+      const req = payload();
+      addMessage("user", req.message);
+
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(req)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(JSON.stringify(data));
+
+        addMessage("assistant", data.message || JSON.stringify(data, null, 2));
+        setMeta(data);
+        appendEvent("response", data);
+        setStatus("普通调用完成", "完成", "ok");
+      } catch (err) {
+        addMessage("assistant", String(err), true);
+        appendEvent("error", String(err));
+        setStatus("普通调用失败", "失败", "bad");
+      } finally {
+        setRunning(false);
+      }
+    }
+
+    async function callStream() {
+      if (isRunning) return;
+      resetConversation();
+      setRunning(true);
+      setStatus("流式调用中...", "流式中", "warn");
+
+      const req = payload();
+      addMessage("user", req.message);
+      const assistantBubble = addMessage("assistant", "");
+
+      try {
+        const res = await fetch("/api/chat/stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(req)
+        });
+        if (!res.ok) throw new Error(await res.text());
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+        let finalText = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const chunks = buffer.split("\n\n");
+          buffer = chunks.pop() || "";
+
+          for (const chunk of chunks) {
+            const lines = chunk.split("\n");
+            let eventName = "message";
+            let raw = "";
+            for (const line of lines) {
+              if (line.startsWith("event:")) eventName = line.slice(6).trim();
+              if (line.startsWith("data:")) raw += line.slice(5).trim();
+            }
+            if (!raw) continue;
+
+            let parsed = raw;
+            try { parsed = JSON.parse(raw); } catch {}
+            appendEvent(eventName, parsed);
+
+            if (eventName === "route" && parsed.route) {
+              $("meta-route").textContent = parsed.route;
+            }
+
+            if (eventName === "tool_call") {
+              const current = $("tool-calls");
+              if (current.querySelector(".empty")) current.innerHTML = "";
+              const tag = document.createElement("div");
+              tag.className = "tool-tag";
+              tag.textContent = `${parsed.tool || "tool"} · running`;
+              current.appendChild(tag);
+            }
+
+            if (eventName === "message") {
+              if (typeof parsed === "string") finalText += parsed;
+              else if (parsed.message) finalText += parsed.message;
+              else finalText += JSON.stringify(parsed, null, 2);
+              assistantBubble.textContent = finalText;
+            }
+
+            if (eventName === "done") {
+              if (parsed && typeof parsed === "object") setMeta(parsed);
+              if (!finalText) assistantBubble.textContent = JSON.stringify(parsed, null, 2);
+            }
+          }
+        }
+
+        setStatus("流式调用完成", "完成", "ok");
+      } catch (err) {
+        assistantBubble.textContent = String(err);
+        appendEvent("error", String(err));
+        setStatus("流式调用失败", "失败", "bad");
+      } finally {
+        setRunning(false);
+      }
+    }
+
+    function clearAll() {
+      if (isRunning) return;
+      $("message").value = "OpsAgent 现在有哪 4 类 route？";
+      resetConversation();
+      setStatus("等待请求", "待机");
+    }
+
+    document.querySelectorAll("[data-prompt]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        $("message").value = btn.dataset.prompt;
+      });
+    });
+
+    $("btn-chat").addEventListener("click", callChat);
+    $("btn-stream").addEventListener("click", callStream);
+    $("btn-clear").addEventListener("click", clearAll);
+
+    refreshHealth();
+    refreshTools();
+  </script>
+</body>
+</html>

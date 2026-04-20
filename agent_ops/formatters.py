@@ -1,5 +1,4 @@
 import json
-import re
 from typing import Any
 
 def load_json(output: str) -> dict[str, Any]:

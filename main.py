@@ -46,13 +46,18 @@ def run_server():
 
 async def index_docs(docs_dir: str):
     """索引文档到知识库"""
-    from tools.knowledge_tool import knowledge_base, load_markdown_docs
+    from tools.knowledge_tool import knowledge_base
 
     logger.info("indexing_documents", directory=docs_dir)
-    chunks = load_markdown_docs(docs_dir)
-    count = knowledge_base.add_documents(chunks)
+    report = knowledge_base.ingest_directory(docs_dir)
     stats = knowledge_base.get_stats()
-    logger.info("indexing_complete", chunks=count, total=stats["total_documents"])
+    logger.info(
+        "indexing_complete",
+        documents=report["document_count"],
+        chunks=report["chunk_count"],
+        total_documents=stats["document_count"],
+        total_chunks=stats["chunk_count"],
+    )
 
 
 async def interactive_chat():

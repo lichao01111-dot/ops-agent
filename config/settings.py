@@ -57,9 +57,21 @@ class Settings(BaseSettings):
     elasticsearch_url: str = "http://localhost:9200"
     loki_url: str = "http://localhost:3100"
 
-    # --- Vector DB ---
-    chroma_persist_dir: str = "./data/chroma"
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    # --- Knowledge / Embeddings ---
+    knowledge_backend: str = "postgres"
+    knowledge_pg_dsn: str = "postgresql://ops_agent:ops_agent@localhost:5432/ops_agent"
+    knowledge_pg_schema: str = "public"
+    knowledge_collection: str = "ops_knowledge"
+    embedding_provider: str = "openai_compatible"
+    embedding_model: str = "text-embedding-3-small"
+    embedding_api_key: str = ""
+    embedding_base_url: str = ""
+    embedding_dimensions: int = 1536
+    embedding_batch_size: int = 32
+    local_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    knowledge_upload_dir: str = "./data/uploads"
+    knowledge_chunk_size: int = 1000
+    knowledge_chunk_overlap: int = 200
 
     # --- Redis ---
     redis_url: str = "redis://localhost:6379/0"

@@ -32,7 +32,6 @@ from agent_kernel import (
     RouterBase,
     create_audit_logger,
     create_session_store,
-    create_tool_registry,
 )
 from agent_kernel.approval import ApprovalDecision, ApprovalPolicy
 from agent_kernel.schemas import (
