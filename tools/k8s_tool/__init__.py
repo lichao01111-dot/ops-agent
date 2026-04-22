@@ -517,6 +517,57 @@ async def rollback_deployment(namespace: str, name: str, revision: int = 0) -> s
         return json.dumps({"error": f"回滚失败: {str(e)}"})
 
 
+@tool
+async def get_k8s_events(
+    namespace: str = "default",
+    name: str = "",
+    resource_type: str = "Deployment",
+    limit: int = 20,
+) -> str:
+    """获取指定 K8s 资源的最近 Events，用于 incident 上下文聚合。
+
+    Args:
+        namespace: K8s namespace
+        name: 资源名称（Deployment / Pod / Service）
+        resource_type: 资源类型，默认 Deployment
+        limit: 返回 event 条数上限
+    """
+    if err := _check_namespace_access(namespace):
+        return json.dumps({"error": err})
+
+    v1, _ = _get_k8s_client()
+    if not v1:
+        return json.dumps({"error": "K8s 客户端未配置"})
+
+    try:
+        field_selector = f"involvedObject.kind={resource_type}"
+        if name:
+            field_selector += f",involvedObject.name={name}"
+        events = v1.list_namespaced_event(
+            namespace=namespace,
+            field_selector=field_selector,
+        )
+        results = []
+        for ev in events.items[-limit:]:
+            results.append({
+                "type": ev.type,
+                "reason": ev.reason,
+                "message": ev.message,
+                "count": ev.count,
+                "first_time": ev.first_timestamp.isoformat() if ev.first_timestamp else None,
+                "last_time": ev.last_timestamp.isoformat() if ev.last_timestamp else None,
+                "involved_object": f"{ev.involved_object.kind}/{ev.involved_object.name}",
+            })
+        return json.dumps({
+            "namespace": namespace,
+            "resource": f"{resource_type}/{name}" if name else resource_type,
+            "total_events": len(results),
+            "events": results,
+        }, ensure_ascii=False, default=str)
+    except Exception as e:
+        return json.dumps({"error": f"获取 K8s Events 失败: {str(e)}"})
+
+
 k8s_tools = [
     get_pod_status,
     get_deployment_status,
@@ -526,4 +577,5 @@ k8s_tools = [
     restart_deployment,
     scale_deployment,
     rollback_deployment,
+    get_k8s_events,
 ]

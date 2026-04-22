@@ -98,6 +98,39 @@ class IntentRouter(RouterBase):
 
     async def route(self, request: ChatRequest) -> RouteDecision:
         text = request.message.lower().strip()
+        ctx = request.context or {}
+
+        # --- Context signals extracted from the ongoing session ----
+        # These shift the default branch when keyword evidence is ambiguous.
+        ctx_has_incident = bool(
+            ctx.get("incident_active")
+            or ctx.get("pod_name")
+            or ctx.get("error_detected")
+        )
+        ctx_has_mutation_target = bool(
+            ctx.get("deployment")
+            or ctx.get("name")
+            or ctx.get("replicas") is not None
+        )
+
+        # --- Explicit investigation override ---
+        # Caller sets context["force_investigate"] = True to route to InvestigatorExecutor.
+        # Also triggered when context signals an active incident without a specific intent.
+        if ctx.get("force_investigate") or (
+            ctx_has_incident
+            and not self._contains_any(text, self.MUTATION_KEYWORDS)
+            and not self._contains_any(text, self.RESTART_KEYWORDS)
+            and not self._contains_any(text, self.SCALE_KEYWORDS)
+            and not self._contains_any(text, self.ROLLBACK_KEYWORDS)
+            and not self._contains_any(text, self.DIAGNOSIS_KEYWORDS)
+            and len(text.split()) <= 6
+        ):
+            return RouteDecision(
+                intent=IntentType.INVESTIGATE,
+                route=AgentRoute.INVESTIGATION,
+                risk_level=RiskLevel.LOW,
+                rationale="incident_context_triage",
+            )
 
         if self._contains_any(text, self.INDEX_KEYWORDS):
             return RouteDecision(
@@ -181,10 +214,28 @@ class IntentRouter(RouterBase):
             )
 
         if any(token in text for token in ("pod", "deployment", "service", "日志", "构建", "jenkins", "namespace")):
+            # Context-aware disambiguation: if there's an active incident in context,
+            # bias read-only K8s queries toward DIAGNOSIS instead of READ_ONLY_OPS.
+            if ctx_has_incident and ("pod" in text or "deployment" in text):
+                return RouteDecision(
+                    intent=IntentType.K8S_DIAGNOSE,
+                    route=AgentRoute.DIAGNOSIS,
+                    risk_level=RiskLevel.MEDIUM,
+                    rationale="ctx_incident_active_bias_toward_diagnosis",
+                )
             return RouteDecision(
                 intent=IntentType.K8S_STATUS if "pod" in text or "deployment" in text or "service" in text else IntentType.LOG_SEARCH,
                 route=AgentRoute.READ_ONLY_OPS,
                 rationale="matched_read_only_ops_keywords",
+            )
+
+        # Context-aware fallback: if context signals a pending mutation target
+        # but the message is ambiguous, route to READ_ONLY_OPS for confirmation.
+        if ctx_has_mutation_target and len(text.split()) <= 4:
+            return RouteDecision(
+                intent=IntentType.K8S_STATUS,
+                route=AgentRoute.READ_ONLY_OPS,
+                rationale="ctx_mutation_target_short_query_confirmation",
             )
 
         llm_decision = await self._route_with_llm(request)

@@ -19,6 +19,7 @@ class IntentType(str, Enum):
     KNOWLEDGE_QA = "knowledge_qa"
     GENERAL_CHAT = "general_chat"
     VERIFY_MUTATION = "verify_mutation"
+    INVESTIGATE = "investigate"   # triage stage — fact collection before hypothesis
 
 class AgentRoute(str, Enum):
     KNOWLEDGE = "knowledge"
@@ -26,6 +27,7 @@ class AgentRoute(str, Enum):
     DIAGNOSIS = "diagnosis"
     MUTATION = "mutation"
     VERIFICATION = "verification"
+    INVESTIGATION = "investigation"  # InvestigatorExecutor route
 
 class MemoryLayer(str, Enum):
     FACTS = "facts"

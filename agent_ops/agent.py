@@ -34,6 +34,7 @@ from agent_kernel.tools.registry import ToolRegistry
 from agent_ops.risk_policy import OpsApprovalPolicy
 from agent_ops.executors import (
     DiagnosisExecutor,
+    InvestigatorExecutor,
     KnowledgeExecutor,
     MutationExecutor,
     ReadOnlyOpsExecutor,
@@ -95,6 +96,10 @@ class OpsAgent(BaseAgent):
             invoke_tool=self._invoke_tool,
             session_store=local_session_store,
         )
+        self.investigator_executor = InvestigatorExecutor(
+            invoke_tool=self._invoke_tool,
+            session_store=local_session_store,
+        )
 
         super().__init__(
             planner=self.planner,
@@ -103,6 +108,7 @@ class OpsAgent(BaseAgent):
             executors=[
                 self.knowledge_executor,
                 self.read_only_executor,
+                self.investigator_executor,
                 self.diagnosis_executor,
                 self.mutation_executor,
                 self.verification_executor,

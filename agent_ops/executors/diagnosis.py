@@ -152,7 +152,7 @@ class DiagnosisExecutor(ExecutorBase):
             "hypotheses": [h.model_dump() for h in enriched],
         }
 
-    # ---------- Stage 1: Symptoms ----------
+    # ---------- Stage 1: Incident-native symptom collection ----------
 
     async def _collect_symptoms(
         self,
@@ -162,6 +162,15 @@ class DiagnosisExecutor(ExecutorBase):
         hints: dict[str, Any],
         event_callback: EventCallback | None,
     ) -> tuple[list[ToolCallEvent], dict[str, Any]]:
+        """Aggregate incident context BEFORE hypothesis generation.
+
+        Collection order (fact-layer first, inference-layer second):
+          1. Pod / Deployment status (current state)
+          2. K8s Events for the deployment (what changed recently)
+          3. Recent error logs (what's been failing)
+          4. Recent Jenkins build (did a deploy just happen?)
+          5. Historical incidents from session memory (recurring?)
+        """
         events: list[ToolCallEvent] = []
         payloads: dict[str, Any] = {}
 
@@ -169,6 +178,7 @@ class DiagnosisExecutor(ExecutorBase):
         namespace = hints.get("namespace") or "default"
         service = hints.get("service")
 
+        # ---- 1. Pod / Deployment status ----
         if pod_name:
             event, output = await self._invoke_tool(
                 "diagnose_pod",
@@ -192,6 +202,20 @@ class DiagnosisExecutor(ExecutorBase):
             events.append(event)
             payloads["get_pod_status"] = self._safe_json(output)
 
+        # ---- 2. K8s Events — "what changed" signal ----
+        if service:
+            event, output = await self._invoke_tool(
+                "get_k8s_events",
+                {"namespace": namespace, "name": service, "resource_type": "Deployment", "limit": 15},
+                event_callback,
+                user_id=state["user_id"],
+                session_id=state["session_id"],
+                route=AgentRoute.DIAGNOSIS,
+            )
+            events.append(event)
+            payloads["k8s_events"] = self._safe_json(output)
+
+        # ---- 3. Recent error logs ----
         if service:
             event, output = await self._invoke_tool(
                 "search_logs",
@@ -204,7 +228,56 @@ class DiagnosisExecutor(ExecutorBase):
             events.append(event)
             payloads["search_logs"] = self._safe_json(output)
 
+        # ---- 4. Recent Jenkins build — "was there a recent deploy?" ----
+        if service:
+            try:
+                event, output = await self._invoke_tool(
+                    "query_jenkins_build",
+                    {"job_name": service, "build_number": None},
+                    event_callback,
+                    user_id=state["user_id"],
+                    session_id=state["session_id"],
+                    route=AgentRoute.DIAGNOSIS,
+                )
+                events.append(event)
+                bld = self._safe_json(output)
+                if not bld.get("error"):
+                    payloads["recent_build"] = bld
+            except Exception:
+                pass  # Jenkins may not be configured — silently skip
+
+        # ---- 5. Historical incidents from session memory ----
+        prior = self._load_prior_incident_context(state["session_id"])
+        if prior:
+            payloads["prior_incident"] = prior
+
         return events, payloads
+
+    def _load_prior_incident_context(self, session_id: str) -> dict[str, Any] | None:
+        """Read the most recent diagnosis summary from HYPOTHESES memory layer.
+
+        This gives the LLM context about recurring patterns — if the same
+        service has crashed twice in the same session, that's a strong signal.
+        """
+        try:
+            summary = self._session_store.resolve_memory_value(
+                session_id,
+                "diagnosis_summary",
+                ["hypotheses"],
+            )
+            cause = self._session_store.resolve_memory_value(
+                session_id,
+                "likely_root_cause",
+                ["hypotheses"],
+            )
+            if summary or cause:
+                return {
+                    "prior_diagnosis_summary": summary or "",
+                    "prior_root_cause": cause or "",
+                }
+        except Exception:
+            pass
+        return None
 
     # ---------- Stage 2: Hypothesis generation ----------
 
@@ -222,17 +295,42 @@ class DiagnosisExecutor(ExecutorBase):
             logger.warning("diagnosis_llm_unavailable", error=str(exc))
             return []
 
+        # Build structured context sections for the hypothesis LLM
+        k8s_ev = symptoms.get("k8s_events", {})
+        recent_build = symptoms.get("recent_build", {})
+        prior = symptoms.get("prior_incident", {})
+
+        context_sections = []
+        if k8s_ev.get("events"):
+            ev_text = "; ".join(
+                f"{e.get('reason')}({e.get('type')}): {(e.get('message') or '')[:60]}"
+                for e in k8s_ev["events"][-5:]
+            )
+            context_sections.append(f"K8s Events(最近5条): {ev_text}")
+        if recent_build and not recent_build.get("error"):
+            context_sections.append(
+                f"最近构建: job={recent_build.get('job_name')} "
+                f"#{recent_build.get('build_number')} result={recent_build.get('result')}"
+            )
+        if prior:
+            context_sections.append(
+                f"历史 incident: {prior.get('prior_root_cause') or prior.get('prior_diagnosis_summary')}"
+            )
+        incident_ctx = "\n".join(context_sections) if context_sections else "无"
+
         prompt = (
             "你是 OpsAgent 的诊断假设生成器。\n"
-            "基于用户诉求、症状摘要和拓扑提示，产出最多 "
-            f"{MAX_HYPOTHESES} 条互不重复的诊断假设。\n"
+            "基于用户诉求、事实层信息（K8s状态/Events/最近构建/历史incident）和拓扑提示，"
+            f"产出最多 {MAX_HYPOTHESES} 条互不重复的诊断假设。\n"
             "要求：\n"
             "- 每条 hypothesis 包含 statement、suspected_target、evidence_tools\n"
             "- evidence_tools 只能从以下候选工具中选：" + ", ".join(candidate_tools) + "\n"
             "- evidence_tools 每条最多 " + str(EVIDENCE_TOOLS_PER_HYPOTHESIS) + " 个\n"
+            "- 优先引用已采集到的异常事件作为假设来源，避免无依据猜测\n"
             "- 不要解释，直接输出结构化结果\n\n"
             f"用户诉求：{goal}\n"
-            f"已采集症状：{self._truncate(json.dumps(symptoms, ensure_ascii=False), 1200)}\n"
+            f"事实层上下文（incident context）：\n{incident_ctx}\n"
+            f"详细症状数据：{self._truncate(json.dumps(symptoms, ensure_ascii=False), 1200)}\n"
             f"拓扑提示：{topology_hint or '无'}"
         )
 

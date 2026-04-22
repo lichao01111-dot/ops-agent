@@ -97,6 +97,11 @@ BUILTIN_TOOL_META: dict[str, dict[str, Any]] = {
         "route_affinity": [AgentRoute.MUTATION, AgentRoute.VERIFICATION],
         "side_effect": True,
     },
+    "get_k8s_events": {
+        "tags": ["k8s", "events", "incident", "诊断", "报警", "event"],
+        "route_affinity": [AgentRoute.DIAGNOSIS, AgentRoute.READ_ONLY_OPS],
+        "side_effect": False,
+    },
 }
 
 
