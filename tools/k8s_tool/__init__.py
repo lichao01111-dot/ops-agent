@@ -8,8 +8,6 @@ Kubernetes 运维 Tool
 from __future__ import annotations
 
 import json
-from typing import Optional
-
 import structlog
 from langchain_core.tools import tool
 
@@ -360,4 +358,172 @@ async def diagnose_pod(
         return json.dumps({"error": f"诊断 Pod 失败: {str(e)}"})
 
 
-k8s_tools = [get_pod_status, get_deployment_status, get_service_info, get_pod_logs, diagnose_pod]
+@tool
+async def restart_deployment(namespace: str, name: str) -> str:
+    """触发 Deployment 滚动重启（等效于 kubectl rollout restart）。
+
+    Args:
+        namespace: K8s namespace
+        name: Deployment 名称
+    """
+    if err := _check_namespace_access(namespace, write=True):
+        return json.dumps({"error": err})
+
+    _, apps_v1 = _get_k8s_client()
+    if not apps_v1:
+        return json.dumps({"error": "K8s 客户端未配置"})
+
+    try:
+        import datetime as _dt
+        patch_body = {
+            "spec": {
+                "template": {
+                    "metadata": {
+                        "annotations": {
+                            "kubectl.kubernetes.io/restartedAt": (
+                                _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        result = apps_v1.patch_namespaced_deployment(
+            name=name, namespace=namespace, body=patch_body
+        )
+        return json.dumps({
+            "namespace": namespace,
+            "name": name,
+            "action": "restart_deployment",
+            "generation": result.metadata.generation,
+            "message": f"Deployment {name} 滚动重启已触发。",
+        }, ensure_ascii=False, default=str)
+    except Exception as e:
+        return json.dumps({"error": f"重启 Deployment 失败: {str(e)}"})
+
+
+@tool
+async def scale_deployment(namespace: str, name: str, replicas: int) -> str:
+    """调整 Deployment 副本数（扩容 / 缩容）。
+
+    Args:
+        namespace: K8s namespace
+        name: Deployment 名称
+        replicas: 目标副本数（0-50）
+    """
+    if err := _check_namespace_access(namespace, write=True):
+        return json.dumps({"error": err})
+
+    if not (0 <= replicas <= 50):
+        return json.dumps({"error": f"replicas={replicas} 不合法，允许范围 0-50"})
+
+    _, apps_v1 = _get_k8s_client()
+    if not apps_v1:
+        return json.dumps({"error": "K8s 客户端未配置"})
+
+    try:
+        patch_body = {"spec": {"replicas": replicas}}
+        apps_v1.patch_namespaced_deployment_scale(
+            name=name, namespace=namespace, body=patch_body
+        )
+        return json.dumps({
+            "namespace": namespace,
+            "name": name,
+            "action": "scale_deployment",
+            "target_replicas": replicas,
+            "message": f"Deployment {name} 目标副本数已设置为 {replicas}。",
+        }, ensure_ascii=False, default=str)
+    except Exception as e:
+        return json.dumps({"error": f"扩缩容失败: {str(e)}"})
+
+
+@tool
+async def rollback_deployment(namespace: str, name: str, revision: int = 0) -> str:
+    """回滚 Deployment 到指定版本（revision=0 表示回滚到上一个版本）。
+
+    Args:
+        namespace: K8s namespace
+        name: Deployment 名称
+        revision: 目标 revision，0 表示上一版本
+    """
+    if err := _check_namespace_access(namespace, write=True):
+        return json.dumps({"error": err})
+
+    _, apps_v1 = _get_k8s_client()
+    if not apps_v1:
+        return json.dumps({"error": "K8s 客户端未配置"})
+
+    try:
+        # kubectl rollout undo 等效于 patch DeprecatedRollbackTo (v1beta1).
+        # 对于 apps/v1，我们通过读取 rollout history 找到目标 revision 的
+        # template hash，然后 patch spec.template 到该快照。
+        # 简化实现：直接通过 deployment rollout 的 annotation 触发 undo。
+        dep = apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
+
+        # 获取 revision history
+        rs_list = apps_v1.list_namespaced_replica_set(
+            namespace=namespace,
+            label_selector=",".join(
+                f"{k}={v}" for k, v in (dep.spec.selector.match_labels or {}).items()
+            ),
+        )
+
+        # 按 revision annotation 排序，找目标 ReplicaSet
+        annotated = []
+        for rs in rs_list.items:
+            rev_str = (rs.metadata.annotations or {}).get(
+                "deployment.kubernetes.io/revision", "0"
+            )
+            try:
+                rev = int(rev_str)
+            except ValueError:
+                rev = 0
+            annotated.append((rev, rs))
+        annotated.sort(key=lambda x: x[0])
+
+        if len(annotated) < 2:
+            return json.dumps({"error": "没有找到可回滚的历史版本"})
+
+        if revision == 0:
+            # 回滚到上一个 revision（当前最大 - 1）
+            target_rs = annotated[-2][1]
+            target_rev = annotated[-2][0]
+        else:
+            matches = [(r, rs) for r, rs in annotated if r == revision]
+            if not matches:
+                return json.dumps({"error": f"找不到 revision={revision} 的历史版本"})
+            target_rev, target_rs = matches[0]
+
+        # patch deployment template to target RS template
+        patch_body = {
+            "spec": {"template": target_rs.spec.template.to_dict()},
+            "metadata": {
+                "annotations": {
+                    "deployment.kubernetes.io/revision": str(target_rev),
+                }
+            },
+        }
+        apps_v1.patch_namespaced_deployment(
+            name=name, namespace=namespace, body=patch_body
+        )
+        return json.dumps({
+            "namespace": namespace,
+            "name": name,
+            "action": "rollback_deployment",
+            "target_revision": target_rev,
+            "message": f"Deployment {name} 已触发回滚到 revision {target_rev}。",
+        }, ensure_ascii=False, default=str)
+    except Exception as e:
+        return json.dumps({"error": f"回滚失败: {str(e)}"})
+
+
+k8s_tools = [
+    get_pod_status,
+    get_deployment_status,
+    get_service_info,
+    get_pod_logs,
+    diagnose_pod,
+    restart_deployment,
+    scale_deployment,
+    rollback_deployment,
+]

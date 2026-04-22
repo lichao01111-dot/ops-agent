@@ -1,9 +1,13 @@
 import json
+from typing import TYPE_CHECKING
 
 from agent_kernel.session import SessionStore
 from agent_ops.extractors import extract_namespace, extract_service_name
 from agent_ops.formatters import load_json
 from agent_ops.schemas import AgentIdentity, MemoryLayer
+
+if TYPE_CHECKING:
+    from agent_ops.mutation_plan import MutationPlan
 
 def update_memory_from_knowledge(
     session_store: SessionStore,
@@ -271,5 +275,117 @@ def write_execution_memory(
             key="approval_receipt_id",
             value=approval_receipt_id,
             source="mutation_execution",
+            confidence=1.0,
+        )
+
+
+def store_mutation_plan(
+    session_store: SessionStore,
+    session_id: str,
+    mutation_plan: "MutationPlan",
+) -> None:
+    """Persist the full MutationPlan in the PLANS layer so VerificationExecutor can read it.
+
+    Uses CHANGE_PLANNER as writer because the mutation plan — including verification
+    criteria and rollback spec — is a planning artifact, not an execution result.
+    """
+    session_store.write_memory_item(
+        session_id,
+        writer=AgentIdentity.CHANGE_PLANNER,
+        layer=MemoryLayer.PLANS,
+        key="mutation_plan",
+        value=mutation_plan.model_dump_json(),
+        source="mutation_executor",
+        confidence=1.0,
+    )
+
+
+def load_mutation_plan(
+    session_store: SessionStore,
+    session_id: str,
+) -> "MutationPlan | None":
+    """Read the MutationPlan stored by the most recent MutationExecutor run."""
+    from agent_ops.mutation_plan import MutationPlan  # late import avoids circular
+    raw = session_store.resolve_memory_value(
+        session_id,
+        "mutation_plan",
+        [MemoryLayer.PLANS],
+    )
+    if not isinstance(raw, str):
+        return None
+    try:
+        return MutationPlan.model_validate_json(raw)
+    except Exception:
+        return None
+
+
+def write_verification_memory(
+    session_store: SessionStore,
+    session_id: str,
+    *,
+    mutation_action: str,
+    target: str,
+    namespace: str,
+    verdict: str,           # "passed" | "failed" | "rolled_back" | "escalated"
+    detail: str = "",
+    step_id: str = "",
+    attempts: int = 0,
+) -> None:
+    """Write the outcome of a verification step into the VERIFICATION memory layer."""
+    session_store.write_memory_item(
+        session_id,
+        writer=AgentIdentity.VERIFICATION,
+        layer=MemoryLayer.VERIFICATION,
+        key="verification_verdict",
+        value=verdict,
+        source="verification_executor",
+        confidence=1.0,
+    )
+    session_store.write_memory_item(
+        session_id,
+        writer=AgentIdentity.VERIFICATION,
+        layer=MemoryLayer.VERIFICATION,
+        key="verification_action",
+        value=mutation_action,
+        source="verification_executor",
+        confidence=1.0,
+    )
+    session_store.write_memory_item(
+        session_id,
+        writer=AgentIdentity.VERIFICATION,
+        layer=MemoryLayer.VERIFICATION,
+        key="verification_target",
+        value=f"{namespace}/{target}",
+        source="verification_executor",
+        confidence=1.0,
+    )
+    if detail:
+        session_store.write_memory_item(
+            session_id,
+            writer=AgentIdentity.VERIFICATION,
+            layer=MemoryLayer.VERIFICATION,
+            key="verification_detail",
+            value=detail[:400],
+            source="verification_executor",
+            confidence=0.9,
+        )
+    if step_id:
+        session_store.write_memory_item(
+            session_id,
+            writer=AgentIdentity.VERIFICATION,
+            layer=MemoryLayer.VERIFICATION,
+            key="verification_step_id",
+            value=step_id,
+            source="verification_executor",
+            confidence=1.0,
+        )
+    if attempts:
+        session_store.write_memory_item(
+            session_id,
+            writer=AgentIdentity.VERIFICATION,
+            layer=MemoryLayer.VERIFICATION,
+            key="verification_attempts",
+            value=attempts,
+            source="verification_executor",
             confidence=1.0,
         )

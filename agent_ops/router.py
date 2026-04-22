@@ -56,12 +56,29 @@ class IntentRouter(RouterBase):
         "error",
         "报错",
     )
-    MUTATION_KEYWORDS = (
+    RESTART_KEYWORDS = (
         "重启",
-        "回滚",
-        "删除",
+        "restart",
+        "rolling restart",
+        "滚动重启",
+    )
+    SCALE_KEYWORDS = (
         "扩容",
         "缩容",
+        "扩缩容",
+        "副本数",
+        "replicas",
+        "scale",
+    )
+    ROLLBACK_KEYWORDS = (
+        "回滚",
+        "rollback",
+        "undo",
+        "恢复版本",
+        "回退",
+    )
+    MUTATION_KEYWORDS = (
+        "删除",
         "部署",
         "发布",
         "执行",
@@ -110,6 +127,33 @@ class IntentRouter(RouterBase):
                 route=AgentRoute.DIAGNOSIS,
                 risk_level=RiskLevel.MEDIUM,
                 rationale="matched_diagnosis_keywords",
+            )
+
+        if self._contains_any(text, self.RESTART_KEYWORDS):
+            return RouteDecision(
+                intent=IntentType.K8S_RESTART,
+                route=AgentRoute.MUTATION,
+                risk_level=RiskLevel.HIGH,
+                requires_approval=True,
+                rationale="matched_restart_keywords",
+            )
+
+        if self._contains_any(text, self.SCALE_KEYWORDS):
+            return RouteDecision(
+                intent=IntentType.K8S_SCALE,
+                route=AgentRoute.MUTATION,
+                risk_level=RiskLevel.HIGH,
+                requires_approval=True,
+                rationale="matched_scale_keywords",
+            )
+
+        if self._contains_any(text, self.ROLLBACK_KEYWORDS):
+            return RouteDecision(
+                intent=IntentType.K8S_ROLLBACK,
+                route=AgentRoute.MUTATION,
+                risk_level=RiskLevel.CRITICAL,
+                requires_approval=True,
+                rationale="matched_rollback_keywords",
             )
 
         if self._contains_any(text, self.MUTATION_KEYWORDS):
@@ -172,9 +216,10 @@ class IntentRouter(RouterBase):
             "只做任务分类，不回答用户问题。"
             "根据用户请求输出 RouteDecision："
             "knowledge=知识/文档/环境问答；"
-            "read_only_ops=只读查询；"
-            "diagnosis=故障诊断；"
-            "mutation=任何有副作用或需要审批的动作。"
+            "read_only_ops=只读查询（Pod 状态、日志、构建状态）；"
+            "diagnosis=故障诊断/原因分析；"
+            "mutation=任何有副作用或需要审批的动作（重启/扩缩容/回滚/索引/生成 Jenkinsfile）。"
+            "verification 路由仅由系统内部使用，禁止输出。"
         )
 
         try:

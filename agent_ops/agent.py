@@ -37,6 +37,7 @@ from agent_ops.executors import (
     KnowledgeExecutor,
     MutationExecutor,
     ReadOnlyOpsExecutor,
+    VerificationExecutor,
 )
 from agent_ops.extractors import extract_namespace, extract_pod_name, extract_service_name
 from agent_ops.formatters import load_json, truncate_text
@@ -90,6 +91,10 @@ class OpsAgent(BaseAgent):
             session_store_instance=local_session_store,
             hint_builder=self._build_diagnosis_hints,
         )
+        self.verification_executor = VerificationExecutor(
+            invoke_tool=self._invoke_tool,
+            session_store=local_session_store,
+        )
 
         super().__init__(
             planner=self.planner,
@@ -100,6 +105,7 @@ class OpsAgent(BaseAgent):
                 self.read_only_executor,
                 self.diagnosis_executor,
                 self.mutation_executor,
+                self.verification_executor,
             ],
             approval_policy=self.approval_policy,
         )

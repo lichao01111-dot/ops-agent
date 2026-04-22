@@ -82,6 +82,21 @@ BUILTIN_TOOL_META: dict[str, dict[str, Any]] = {
         "route_affinity": [AgentRoute.MUTATION],
         "side_effect": True,
     },
+    "restart_deployment": {
+        "tags": ["k8s", "deployment", "restart", "重启", "滚动重启", "rolling restart"],
+        "route_affinity": [AgentRoute.MUTATION],
+        "side_effect": True,
+    },
+    "scale_deployment": {
+        "tags": ["k8s", "deployment", "scale", "扩容", "缩容", "副本", "replicas"],
+        "route_affinity": [AgentRoute.MUTATION],
+        "side_effect": True,
+    },
+    "rollback_deployment": {
+        "tags": ["k8s", "deployment", "rollback", "回滚", "undo", "恢复版本"],
+        "route_affinity": [AgentRoute.MUTATION, AgentRoute.VERIFICATION],
+        "side_effect": True,
+    },
 }
 
 

@@ -98,6 +98,78 @@ def format_read_only_summary(outputs: list[tuple[str, str]]) -> str:
         lines.append(format_single_read_only_result(tool_name, payload))
     return "\n\n".join(filter(None, lines))
 
+def format_k8s_mutation_pending(action: str, target: str, namespace: str, step_id: str | None) -> str:
+    """审批等待提示 (k8s 变更操作)."""
+    action_labels = {
+        "restart_deployment": "滚动重启 Deployment",
+        "scale_deployment": "调整 Deployment 副本数",
+        "rollback_deployment": "回滚 Deployment",
+    }
+    label = action_labels.get(action, action)
+    return (
+        "当前请求属于 K8s 变更操作，执行前需要审批。\n"
+        f"操作: {label}\n"
+        f"目标: {namespace}/{target}\n"
+        f"step_id: {step_id or 'unknown'}\n"
+        "如果确认执行，请在下一次请求中携带 `context.approval_receipt`，"
+        "例如：`{\"receipt_id\":\"r-123\",\"step_id\":\"当前 step_id\"}`。"
+    )
+
+
+def format_k8s_mutation_result(action: str, output: str, target: str, namespace: str) -> str:
+    """变更执行完成提示 (k8s 操作)."""
+    payload = load_json(output)
+    if payload.get("error"):
+        return f"K8s 变更执行失败：{payload['error']}"
+    action_labels = {
+        "restart_deployment": "滚动重启",
+        "scale_deployment": "扩缩容",
+        "rollback_deployment": "回滚",
+    }
+    label = action_labels.get(action, action)
+    detail = payload.get("message", "")
+    return (
+        f"✅ {label}已触发。\n"
+        f"目标: {namespace}/{target}\n"
+        f"{detail}\n"
+        "验证步骤将自动执行，持续监控 Deployment 状态…"
+    )
+
+
+def format_verification_passed(action: str, target: str, namespace: str, attempts: int) -> str:
+    return (
+        f"✅ 变更验证通过。\n"
+        f"操作: {action}  目标: {namespace}/{target}\n"
+        f"共轮询 {attempts} 次，Deployment 已达到预期状态。"
+    )
+
+
+def format_verification_failed_with_rollback(
+    action: str, target: str, namespace: str, attempts: int, rollback_output: str
+) -> str:
+    payload = load_json(rollback_output)
+    rollback_ok = not bool(payload.get("error"))
+    rollback_status = "回滚已触发" if rollback_ok else f"回滚失败: {payload.get('error', '未知错误')}"
+    return (
+        f"⚠️ 变更验证失败，已触发自动回滚。\n"
+        f"操作: {action}  目标: {namespace}/{target}\n"
+        f"轮询 {attempts} 次后 Deployment 仍未就绪。\n"
+        f"回滚结果: {rollback_status}\n"
+        "建议检查镜像是否可拉取、资源配额是否充足、Pod Events 是否有异常。"
+    )
+
+
+def format_verification_escalated(
+    action: str, target: str, namespace: str, attempts: int, escalation_message: str
+) -> str:
+    return (
+        f"🚨 变更验证失败，需要人工介入。\n"
+        f"操作: {action}  目标: {namespace}/{target}\n"
+        f"轮询 {attempts} 次后仍未通过。\n"
+        f"{escalation_message}"
+    )
+
+
 def format_mutation_plan(plan: dict[str, Any], step_id: str | None) -> str:
     return (
         "当前请求被识别为变更操作，执行前需要审批。\n"

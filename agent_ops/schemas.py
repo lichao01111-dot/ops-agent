@@ -11,16 +11,21 @@ class IntentType(str, Enum):
     K8S_STATUS = "k8s_status"
     K8S_DIAGNOSE = "k8s_diagnose"
     K8S_OPERATE = "k8s_operate"
+    K8S_RESTART = "k8s_restart"
+    K8S_SCALE = "k8s_scale"
+    K8S_ROLLBACK = "k8s_rollback"
     LOG_SEARCH = "log_search"
     LOG_ANALYZE = "log_analyze"
     KNOWLEDGE_QA = "knowledge_qa"
     GENERAL_CHAT = "general_chat"
+    VERIFY_MUTATION = "verify_mutation"
 
 class AgentRoute(str, Enum):
     KNOWLEDGE = "knowledge"
     READ_ONLY_OPS = "read_only_ops"
     DIAGNOSIS = "diagnosis"
     MUTATION = "mutation"
+    VERIFICATION = "verification"
 
 class MemoryLayer(str, Enum):
     FACTS = "facts"
