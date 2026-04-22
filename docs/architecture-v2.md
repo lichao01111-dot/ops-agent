@@ -225,68 +225,169 @@ class RouteCatalog:
 
 ### 5.1 OpsAgent 的组成
 
+当前 OpsAgent 包含 **6 个执行器**，形成完整的调查→诊断→变更→校验闭环：
+
 ```
 agent_ops/
-├─ ops_agent.py             ← 继承 BaseAgent，装配各组件
-├─ router.py                ← OpsKeywordRouter(RouterBase)
+├─ agent.py                 ← OpsAgent(BaseAgent) 装配入口
+├─ planner.py               ← OpsPlanner：_maybe_replan（mutation 后自动追加 verification）
+├─ router.py                ← IntentRouter(RouterBase)：关键词 + 上下文信号 + LLM fallback
+├─ schemas.py               ← AgentRoute / IntentType / Hypothesis / ServiceNode …
 ├─ executors/
-│   ├─ knowledge.py         ← KnowledgeExecutor(ExecutorBase)
-│   ├─ read_only.py         ← ReadOnlyOpsExecutor(ExecutorBase)
-│   ├─ diagnosis.py         ← DiagnosisExecutor(ExecutorBase)    ★
-│   └─ mutation.py          ← MutationExecutor(ExecutorBase)
-├─ extractors.py            ← _extract_namespace / _pod / _service / _build_number
-├─ formatters.py            ← _format_single_read_only_result / _format_index_result...
-├─ memory_hooks.py          ← _update_memory_from_tool_output (Ops OBSERVATIONS 写入规则)
-├─ topology.py              ← ServiceTopology（Ops 特化，其他垂直可能不需要拓扑）
-├─ memory_schema.py         ← 注册 Ops 的 6 层语义
-├─ risk_policy.py           ← Ops 的 Approval 规则（生产 namespace + mutation → 必审批）
-└─ tools/                   ← K8s / Jenkins / Logs 12 个工具
-    ├─ k8s_tool.py
-    ├─ jenkins_tool.py
-    └─ ...
+│   ├─ knowledge.py         ← KnowledgeExecutor(ExecutorBase)       route="knowledge"
+│   ├─ read_only.py         ← ReadOnlyOpsExecutor(ExecutorBase)      route="read_only_ops"
+│   ├─ investigator.py      ← InvestigatorExecutor(ExecutorBase) ★   route="investigation"
+│   ├─ diagnosis.py         ← DiagnosisExecutor(ExecutorBase)    ★   route="diagnosis"
+│   ├─ mutation.py          ← MutationExecutor(ExecutorBase)         route="mutation"
+│   └─ verification.py      ← VerificationExecutor(ExecutorBase) ★   route="verification"
+├─ mutation_plan.py         ← MutationPlan / VerificationCriteria / RollbackSpec + 工厂函数
+├─ extractors.py            ← extract_namespace / extract_service_name / extract_pod_name
+├─ formatters.py            ← 各路由响应格式化函数
+├─ memory_hooks.py          ← store_mutation_plan / load_mutation_plan / write_verification_memory
+├─ memory_schema.py         ← OPS_MEMORY_SCHEMA（6 层 + RBAC 写入权限）
+├─ risk_policy.py           ← OpsApprovalPolicy（namespace 约束 + 回滚预授权）
+├─ tool_setup.py            ← 注册 16 个 Ops 工具
+└─ topology.py              ← ServiceTopology（Ops 特化）
 ```
+
+★ 标注的是新增执行器，相比旧版（4 executors）的核心扩展点。
+
+### 5.1.1 六个执行器职责速查
+
+| 执行器 | route | 触发条件 | 核心行为 |
+|--------|-------|----------|----------|
+| `KnowledgeExecutor` | `knowledge` | 知识库 / SOP / 文档问答 | RAG-first，非 ReAct |
+| `ReadOnlyOpsExecutor` | `read_only_ops` | 查询 Pod / 日志 / Jenkins | 确定性查询，非 ReAct |
+| `InvestigatorExecutor` | `investigation` | 活跃告警 + 短消息 / `force_investigate` | asyncio.gather 5 工具并行，写 OBSERVATIONS |
+| `DiagnosisExecutor` | `diagnosis` | 故障原因 / 根因分析 | 多假设生成 + 5 层症状采集 + 打分 |
+| `MutationExecutor` | `mutation` | 重启 / 扩缩容 / 回滚 / 生成 | 构建 MutationPlan，审批，执行，写 PLANS |
+| `VerificationExecutor` | `verification` | OpsPlanner 自动追加 | 轮询校验，失败自动回滚或升级 |
 
 ### 5.2 装配入口
 
 ```python
-# agent_ops/ops_agent.py
-from agent_kernel import BaseAgent, Planner, ToolRegistry, AuditLogger
-from agent_ops.router import OpsKeywordRouter
-from agent_ops.executors import (
-    KnowledgeExecutor, ReadOnlyOpsExecutor,
-    DiagnosisExecutor, MutationExecutor,
-)
-from agent_ops.memory_schema import OPS_MEMORY_SCHEMA
-from agent_ops.risk_policy import OpsApprovalPolicy
-from agent_ops.tools import register_all_ops_tools
-from agent_ops.topology import get_topology
+# agent_ops/agent.py
+class OpsAgent(BaseAgent):
+    def __init__(self, *, session_store, tool_registry, audit_logger, mcp_client=None):
+        self.router = IntentRouter()
+        self.planner = OpsPlanner(router=self.router)      # 含 _maybe_replan
+        self.approval_policy = OpsApprovalPolicy()
 
-def create_ops_agent() -> BaseAgent:
-    registry = ToolRegistry()
-    register_all_ops_tools(registry)          # 注册 12 个 Ops 工具
+        # 16 个工具注册到 ToolRegistry
+        # tools/k8s_tool/: get_pod_status, get_deployment_status, get_k8s_events,
+        #                   restart_deployment, scale_deployment, rollback_deployment,
+        #                   get_pod_logs, get_service_status
+        # tools/jenkins_tool/: query_jenkins_build, trigger_jenkins_build
+        # tools/log_tool/: search_logs
+        # tools/knowledge_tool/: query_knowledge, index_documents
+        # 以及 diagnose_pod, get_namespace_summary, generate_jenkinsfile
 
-    topology = get_topology()
+        executors = [
+            KnowledgeExecutor(invoke_tool=..., session_store=session_store),
+            ReadOnlyOpsExecutor(invoke_tool=..., session_store=session_store),
+            InvestigatorExecutor(invoke_tool=..., session_store=session_store),
+            DiagnosisExecutor(invoke_tool=..., llm_provider=..., topology=..., ...),
+            MutationExecutor(invoke_tool=..., session_store=session_store),
+            VerificationExecutor(invoke_tool=..., session_store=session_store),
+        ]
 
-    router = OpsKeywordRouter()
-    planner = Planner(router=router)
-
-    executors = [
-        KnowledgeExecutor(registry=registry),
-        ReadOnlyOpsExecutor(registry=registry),
-        DiagnosisExecutor(registry=registry, topology=topology),   # 仍是 Ops 特化
-        MutationExecutor(registry=registry, approval=OpsApprovalPolicy()),
-    ]
-
-    return BaseAgent(
-        planner=planner,
-        router=router,
-        executors=executors,
-        memory_schema=OPS_MEMORY_SCHEMA,
-        audit=AuditLogger(),
-    )
+        super().__init__(
+            planner=self.planner,
+            session_store=session_store,
+            audit_logger=audit_logger,
+            executors=executors,
+            approval_policy=self.approval_policy,
+        )
 ```
 
-### 5.3 DiagnosisExecutor 仍然保留在 OpsAgent
+### 5.2.1 Mutation 执行闭环
+
+`MutationPlan` 是 mutation → verification 传递上下文的核心数据结构：
+
+```python
+# agent_ops/mutation_plan.py
+@dataclass
+class VerificationCriteria:
+    tool: str                    # 校验工具（通常是 get_deployment_status）
+    args: dict                   # 工具参数
+    success_condition: str       # "ready_replicas >= N"
+    poll_interval_s: int = 10    # 轮询间隔
+    max_attempts: int = 6        # 最大轮询次数
+    expected_replicas: int = 0
+
+@dataclass
+class RollbackSpec:
+    tool: str                    # 回滚工具（rollback_deployment）
+    args: dict
+    escalation_message: str      # 回滚失败时的升级消息
+
+@dataclass
+class MutationPlan:
+    action: MutationAction       # RESTART_DEPLOYMENT / SCALE_DEPLOYMENT / …
+    target: str                  # Deployment 名称
+    namespace: str
+    tool_name: str
+    tool_args: dict
+    verification: VerificationCriteria | None
+    rollback: RollbackSpec | None
+    step_id: str = ""
+    approval_receipt_id: str = ""
+```
+
+`OpsPlanner._maybe_replan()` 在 mutation step 成功后自动追加 verification step：
+
+```python
+# agent_ops/planner.py
+_MUTATION_INTENTS_NEEDING_VERIFY = {"k8s_operate", "k8s_restart", "k8s_scale", "k8s_rollback"}
+
+def _maybe_replan(self, plan, last_step):
+    if last_step.route != "mutation": return None
+    if last_step.status != PlanStepStatus.SUCCEEDED: return None
+    if str(last_step.intent) not in _MUTATION_INTENTS_NEEDING_VERIFY: return None
+    if any(s.route == "verification" for s in plan.steps): return None
+    return PlanStep(route="verification", intent="verify_mutation", ...)
+```
+
+`OpsApprovalPolicy` 对回滚预授权（verification 阶段无需再次审批）：
+
+```python
+# agent_ops/risk_policy.py
+_VERIFICATION_AUTO_APPROVED_TOOLS = frozenset({"rollback_deployment"})
+
+def evaluate(self, *, tool_name, route, step, context):
+    if str(route) == AgentRoute.VERIFICATION and tool_name in _VERIFICATION_AUTO_APPROVED_TOOLS:
+        return ApprovalDecision(approved=True, reason="auto_rollback_pre_authorized_by_mutation_approval")
+    return super().evaluate(...)
+```
+
+### 5.3 有限多 Agent 模式（InvestigatorExecutor）
+
+OpsAgent 实现了"有限多 Agent"而不是全功能 Supervisor，原因见 §7 前的说明：
+
+```
+调查路由触发条件（满足任一）：
+  ctx.force_investigate = True
+  OR（ctx_has_incident AND 消息 ≤ 6 词 AND 没有明确 mutation/restart/rollback 意图）
+
+InvestigatorExecutor（asyncio.gather 并行）：
+  pod_status      → get_pod_status
+  deployment_status → get_deployment_status
+  k8s_events      → get_k8s_events (Warning 事件)
+  error_logs      → search_logs (ERROR, 最近 1 小时)
+  recent_build    → query_jenkins_build
+
+写 OBSERVATIONS 层（供 DiagnosisExecutor 读取）：
+  pod_name / last_pod_status / k8s_warning_events
+  error_log_count / last_error_message
+  last_build_result / last_build_number
+```
+
+这个模式覆盖 90% 的真实 on-call 场景，无需引入通用 Supervisor 的复杂性：
+- 简单只读查询：跳过 investigator，直接 READ_ONLY_OPS
+- 模糊/告警查询：investigator 先行，然后 diagnosis + mutation
+- 已知变更：跳过 investigator
+
+### 5.4 DiagnosisExecutor 仍然保留在 OpsAgent
 
 **重要**：`DiagnosisExecutor` 的多假设并行模式虽然精妙，但它的**启发式打分**（"oom" / "crashloop" / "imagepullbackoff"）是 Ops 特有的，因此它属于 `agent_ops/`，不进 Kernel。
 
@@ -306,19 +407,22 @@ class MultiHypothesisExecutor(ExecutorBase):
 `agent_ops/executors/diagnosis.py` 继承它，填入 Ops 的症状采集、Ops 的打分规则。  
 未来 `agent_csm/executors/complaint_diagnosis.py` 也可以继承它，填入客服的信号词（"退款"、"延迟"、"漏发"）。
 
-### 5.4 Ops 的 MemorySchema
+### 5.5 Ops 的 MemorySchema
 
 ```python
 # agent_ops/memory_schema.py
 OPS_MEMORY_SCHEMA = MemorySchema(layers={
-    "facts":        {"knowledge"},
-    "observations": {"read_ops", "diagnosis"},
-    "hypotheses":   {"diagnosis"},
-    "plans":        {"change_planner"},
-    "execution":    {"change_executor"},
-    "verification": {"verifier"},
+    #  层               允许写入的 AgentIdentity
+    "facts":        {AgentIdentity.KNOWLEDGE},                          # 知识事实
+    "observations": {AgentIdentity.READ_OPS, AgentIdentity.DIAGNOSIS}, # 工具观察
+    "hypotheses":   {AgentIdentity.DIAGNOSIS},                         # 根因假设
+    "plans":        {AgentIdentity.CHANGE_PLANNER},                    # MutationPlan
+    "execution":    {AgentIdentity.CHANGE_EXECUTOR},                   # 执行结果
+    "verification": {AgentIdentity.VERIFICATION},                      # 校验结论
 })
 ```
+
+InvestigatorExecutor 使用 `AgentIdentity.READ_OPS` 写 `observations` 层（与 ReadOnlyOpsExecutor 共享写权限），因此调查阶段采集的 pod_name / error_log_count 等事实可以被 DiagnosisExecutor 直接读取，无需重复工具调用。
 
 其他垂直可以注册**完全不同的层**：
 
@@ -334,29 +438,31 @@ CSM_MEMORY_SCHEMA = MemorySchema(layers={
 
 Kernel 只管 `write_memory_item(layer, writer, ...)` 的 RBAC 校验，层的定义交给 Vertical。
 
-### 5.5 Session / Memory 的实例归属
+### 5.6 Session / Memory 的实例归属
 
 这是一个必须写清楚的边界：
 
-- `SessionStore` / `MemoryBackend` 的**接口**属于 Kernel
-- `InMemorySessionStore` / `RedisSessionStore` 这类**默认实现**可以放在 Kernel
+- `SessionStore` 的**接口**属于 Kernel（`agent_kernel/session.py`）
+- **默认实现**：`InMemorySessionStore`（测试 / 开发）和 `RedisSessionStore`（生产）都在 Kernel
+  - `RedisSessionStore` 使用 key 前缀 `{prefix}:{session_id}:{messages|route|mem:{layer}|artifacts}` 隔离数据
+  - 支持 TTL 管理（`_touch()` 刷新全部 session keys）和原子写入（Redis pipeline）
 - 但**实例生命周期归 Vertical 装配层管理**，不能在 Kernel 放全局单例给多个 Vertical 共用
 
-也就是说，Kernel 提供“怎么存”的契约，Vertical 决定“这个 Agent 用哪一个实例”：
-
 ```python
-def create_ops_agent() -> BaseAgent:
-    session_store = RedisSessionStore(prefix="ops")
-    memory_backend = RedisMemoryBackend(prefix="ops")
-    ...
-    return BaseAgent(
-        ...,
-        session_store=session_store,
-        memory_backend=memory_backend,
-    )
+# 生产环境：通过 REDIS_URL 环境变量自动选择
+from agent_kernel.session_redis import create_redis_session_store
+
+session_store = create_redis_session_store(prefix=”ops”)  # 若无 REDIS_URL 则 fallback 到内存
+
+# agent_ops/agent.py 中注入到 OpsAgent
+agent = OpsAgent(
+    session_store=session_store,
+    tool_registry=registry,
+    audit_logger=audit_logger,
+)
 ```
 
-这样才能满足 §2 的“每个 Vertical 不共享运行时状态”，也避免 Supervisor / 子 Agent 之间的记忆串味。
+这样才能满足 §2 的”每个 Vertical 不共享运行时状态”，也避免 Supervisor / 子 Agent 之间的记忆串味。
 
 ---
 
@@ -501,10 +607,10 @@ OrderContext (Csm 专属)
 |------|-------------|------------------|
 | 工具副作用隔离 | `side_effect=True` 只能在 MUTATION-like 路由 + approval | 标注每个工具的 `side_effect` |
 | RBAC 身份 | `MemorySchema` 拦截非法 writer | 定义有哪些 writer、写哪些层 |
-| 审批 | `ApprovalPolicy.evaluate(step, context)` 强制调用，并验证 `approval_receipt` | 实现具体判定（金额 / namespace / 字段） |
+| 审批 | `ApprovalPolicy.evaluate(step, context)` 强制调用，并验证 `approval_receipt` | 实现具体判定（namespace / 风险等级）；可扩展 verification 路由的回滚预授权 |
 | 审计 | 每次工具调用必落 audit | 扩展脱敏规则 |
 | 迭代预算 | `Plan.max_iterations` 硬上限 | 可调节数值，不能取消 |
-| FAILED fail-fast | 默认终止 | 可通过 `_maybe_replan` 显式覆写 |
+| FAILED fail-fast | 默认终止 | 可通过 `_maybe_replan` 显式覆写（OpsPlanner 用此追加 verification） |
 
 ### 8.3 一张图看清"谁拦谁"
 
@@ -534,90 +640,38 @@ OrderContext (Csm 专属)
 
 ---
 
-## 9. 从当前代码到新架构的迁移路径
+## 9. 当前实现状态与演进路径
 
-**不做大爆炸重构。** 分三步渐进：
+### 9.1 已完成（当前代码）
 
-### Step 1：原地拆分（1–2 周）
+架构迁移已完成，以下功能均已落地并通过 84 个测试：
 
-**目的**：让"骨架代码"和"Ops 代码"物理分开，**行为保持不变**。
+| 功能 | 状态 | 位置 |
+|------|------|------|
+| Kernel + Vertical 分层 | ✅ 完成 | `agent_kernel/` + `agent_ops/` |
+| 6 Executor 动态 wiring | ✅ 完成 | `OpsAgent.__init__` → `BaseAgent._build_graph` |
+| Mutation 执行闭环 | ✅ 完成 | `mutation_plan.py` + `MutationExecutor` + `OpsPlanner._maybe_replan` |
+| VerificationExecutor | ✅ 完成 | `agent_ops/executors/verification.py` |
+| InvestigatorExecutor | ✅ 完成 | `agent_ops/executors/investigator.py` |
+| Redis 持久化 session | ✅ 完成 | `agent_kernel/session_redis.py` |
+| 完整审批状态机 | ✅ 完成 | `agent_kernel/approval.py` + `OpsApprovalPolicy` |
+| 回滚预授权 | ✅ 完成 | `OpsApprovalPolicy._VERIFICATION_AUTO_APPROVED_TOOLS` |
+| K8s 写操作工具（restart/scale/rollback） | ✅ 完成 | `tools/k8s_tool/` |
+| 上下文感知路由 | ✅ 完成 | `IntentRouter`（ctx_has_incident / ctx_has_mutation_target） |
+| MemorySchema RBAC | ✅ 完成 | `agent_kernel/memory/schema.py` + `OPS_MEMORY_SCHEMA` |
+| Kernel 契约测试 | ✅ 完成 | `tests/kernel_contract/` |
 
-```
-动作：
-  - 新建 agent_kernel/ 和 agent_ops/
-  - 按下表搬文件
-  - 测试全部继续通过
+### 9.2 演进方向
 
-agent_core/agent.py
-  → agent_kernel/base_agent.py         (_build_graph, _planner_node, _dispatcher, chat, chat_stream)
-  → agent_ops/executors/*.py           (_execute_knowledge, _execute_read_only_ops, _execute_mutation)
-  → agent_ops/executors/diagnosis.py   (已经独立了)
-  → agent_ops/extractors.py            (_extract_*)
-  → agent_ops/formatters.py            (_format_*)
-  → agent_ops/memory_hooks.py          (_update_memory_from_tool_output)
+**下一步（框架扩展）**：
 
-agent_core/planner.py
-  → agent_kernel/planner.py            (保持不变，Planner 本来就通用)
+- **第二个 Vertical**：DocAgent 或 JiraAgent，验证 Kernel 真正通用（目标：只写 ~30% Ops 特化代码）
+- **MCP + tool retrieval**：替换静态 16 工具列表，工具数增加不影响路由准确率
+- **Router 升级为 meta-planner**：支持图内回跳、混合意图的 multi-step 规划
 
-agent_core/schemas.py
-  → agent_kernel/schemas.py            (Plan/PlanStep/... 通用部分)
-  → agent_ops/schemas.py               (Hypothesis / ServiceNode / Ops 枚举值)
+**远期（Supervisor）**：
 
-tools/registry.py
-  → agent_kernel/tools/registry.py     (类本身)
-  → agent_ops/tools/meta.py            (BUILTIN_TOOL_META，Ops 工具的 tags/side_effect)
-
-tools/mcp_gateway.py
-  → agent_kernel/tools/mcp_gateway.py
-
-agent_core/topology.py
-  → agent_ops/topology.py              (拓扑是 Ops 特化的)
-
-agent_core/router.py
-  → agent_kernel/router.py             (RouterBase + RouteDecision / RouteKey 契约)
-  → agent_ops/router.py                (OpsKeywordRouter 具体实现)
-
-agent_core/session.py  / audit.py
-  → agent_kernel/session.py / audit.py
-  → 但 SessionStore / MemoryBackend 实例仍由 Ops 装配层创建，不在 Kernel 持有全局单例
-```
-
-**验证**：
-
-- `pytest tests/test_agent.py` 全通过
-- 新增一组 `tests/kernel_contract/`，至少覆盖：
-  - 非 Ops 的 dummy vertical 能注册独立 route / memory layer
-  - side-effect tool 没有 `approval_receipt` 时必失败
-  - 不同 Vertical 的 session / memory 实例不会串数据
-  - BaseAgent 动态 executors wiring 生效，不依赖 4 个硬编码 route
-
-### Step 2：抽出插件基类（1 周）
-
-**目的**：让 Kernel 真的不认 Ops。
-
-```
-动作：
-  - 定义 ExecutorBase / RouterBase / MemorySchema / ApprovalPolicy 抽象
-  - BaseAgent 的 __init__ 从 "硬编码 4 个 node" 改为 "遍历 executors: list[ExecutorBase]"
-  - AgentRoute / MemoryLayer / AgentIdentity 从“固定 Enum”改为“可注册字符串 + 校验器”
-  - OpsAgent 调用 create_ops_agent() 装配
-  - 跑同样的测试
-```
-
-### Step 3：加第二个 Vertical 压测框架（2–3 周）
-
-**目的**：验证 Kernel 真的通用。
-
-选一个**简单**的垂直作为二号 Agent，比如：
-
-- **DocAgent**：只做文档问答 + 生成（少量工具、低风险，适合快速验证）
-- 或 **JiraAgent**：工单查询 + 状态变更（结构和 Ops 相似，差异化记忆 schema 即可）
-
-不要一开始就上 CsmAgent / DataAgent 这种复杂领域——目标是**验证框架**，不是业务突破。
-
-### Step 4（可选，远期）：Supervisor
-
-只有当你有 ≥ 2 个 Vertical 都在稳定运行、且出现明确的跨域场景时再做。
+只有当 ≥ 2 个 Vertical 都在稳定运行、且出现明确的跨域场景时再上 Supervisor 多 Agent 模式。不要提前做。
 
 ---
 
@@ -681,14 +735,21 @@ agent_core/session.py  / audit.py
 │  记忆 Schema 接口          Kernel           MemorySchema         │
 │  会话存储接口              Kernel           SessionStore         │
 │                                                                │
-│  Ops 路由（关键词）         Vertical (Ops)   OpsKeywordRouter    │
+│  Ops 路由（关键词+上下文）   Vertical (Ops)   IntentRouter        │
 │  K8s/Jenkins/Logs 工具     Vertical (Ops)   @tool + register    │
-│  Ops 执行器 × 4            Vertical (Ops)   *Executor(ExecBase) │
+│  Ops 执行器 × 6            Vertical (Ops)   *Executor(ExecBase) │
+│    investigation           Vertical (Ops)   InvestigatorExecutor│
+│    knowledge               Vertical (Ops)   KnowledgeExecutor   │
+│    read_only_ops           Vertical (Ops)   ReadOnlyOpsExecutor │
+│    diagnosis               Vertical (Ops)   DiagnosisExecutor   │
+│    mutation                Vertical (Ops)   MutationExecutor    │
+│    verification            Vertical (Ops)   VerificationExecutor│
+│  MutationPlan（变更闭环）   Vertical (Ops)   mutation_plan.py    │
 │  服务拓扑                  Vertical (Ops)   ServiceTopology     │
 │  Ops 提取 / 格式化          Vertical (Ops)   extractors/formatters│
 │  Ops 记忆层定义            Vertical (Ops)   OPS_MEMORY_SCHEMA    │
-│  Ops 审批规则              Vertical (Ops)   OpsApprovalPolicy    │
-│  Session/Memory 实例装配    Vertical (Ops)   create_ops_agent    │
+│  Ops 审批规则 + 回滚预授权  Vertical (Ops)   OpsApprovalPolicy    │
+│  Session/Memory 实例装配    Vertical (Ops)   OpsAgent.__init__   │
 │                                                                │
 │  跨 Agent 调度              Supervisor       MetaPlanner         │
 │  子 Agent 代理              Supervisor       AgentProxyExecutor  │
@@ -698,13 +759,17 @@ agent_core/session.py  / audit.py
 
 ---
 
-## 附录 B：与旧版 v2 文档的差异
+## 附录 B：各版本差异速查
 
-| 旧版 v2 | 新版 v2（本文） |
-|---------|----------------|
-| 描述一个"更强的 OpsAgent" | 描述 Kernel + Vertical 的分层框架 |
-| DiagnosisExecutor 在架构层 | DiagnosisExecutor 是 Ops 垂直里的组件 |
-| `AgentRoute` 固定 4 个值 | Route / Layer / Identity 改为“可注册字符串契约” |
-| `MemoryLayer` 固定 6 层 | `MemoryLayer` 由 Vertical 的 MemorySchema 定义 |
-| 没有 Supervisor | 预留 Supervisor 多 Agent 演进路径 |
-| 强调"加工具扩展能力" | 强调"加 Vertical 扩展领域，工具只是 Vertical 的一部分" |
+| 维度 | 旧版 v2（设计文档初稿） | 当前实现（已落地） |
+|------|------------------------|-------------------|
+| 定位 | 描述一个”更强的 OpsAgent” | Kernel + Vertical 分层框架，已实现 |
+| Executor 数量 | 4（knowledge / read / diagnosis / mutation） | 6（+investigation / +verification） |
+| Mutation 执行 | 计划 + 审批骨架 | 完整闭环：计划→审批→执行→自动追加校验→自动回滚 |
+| K8s 写操作工具 | 计划中，未实现 | 已实现：restart / scale / rollback / get_k8s_events（共 16 工具） |
+| Session 持久化 | 概念描述（RedisSessionStore 示例） | 已实现：`agent_kernel/session_redis.py` |
+| Approval 状态机 | 骨架 | 完整：receipt 绑定 step + 有效期 + 回滚预授权 |
+| 多 Agent 模式 | Supervisor（演进方向） | 有限多 Agent（Investigator + Executor/Verifier） |
+| 工具数量 | 12 | 16（+restart_deployment / +scale_deployment / +rollback_deployment / +get_k8s_events） |
+| 路由信号 | 纯关键词 | 关键词 + 上下文信号（ctx_has_incident / ctx_has_mutation_target） + LLM fallback |
+| `MemoryLayer` | 固定 Enum | Vertical 的 MemorySchema 定义，RBAC 校验 |
