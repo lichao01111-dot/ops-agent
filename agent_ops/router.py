@@ -18,7 +18,28 @@ logger = structlog.get_logger()
 
 
 class IntentRouter(RouterBase):
-    """Route incoming requests into purpose-built subgraphs."""
+    """Route incoming requests into purpose-built subgraphs.
+
+    Routing strategy (upgraded per arch review 2026-04):
+
+        keyword_rules  ─┐
+                        ├── confidence_score ──► high: use directly
+        context_signals ┘                         low:  ask LLM second-opinion
+                                                  none: default_fallback
+
+    Confidence values (see ``_decide_with_confidence``):
+      - unambiguous keyword match (single category)      → 0.90
+      - ambiguous: multiple categories match             → 0.55 (escalate)
+      - context signal only                              → 0.55 (escalate)
+      - no signal at all                                 → 0.30 (escalate)
+
+    If the LLM returns a decision with its own confidence we take the higher.
+    Below ``LLM_ESCALATION_THRESHOLD`` we always ask the LLM; above it we use
+    the rule-based decision directly. This keeps the fast path cheap while
+    letting hard cases be disambiguated by a model.
+    """
+
+    LLM_ESCALATION_THRESHOLD: float = 0.6
 
     INDEX_KEYWORDS = (
         "索引",
@@ -40,6 +61,16 @@ class IntentRouter(RouterBase):
         "mysql",
         "redis",
         "kafka",
+    )
+    CONFIG_QUERY_KEYWORDS = (
+        "configmap",
+        "配置项",
+        "配置文件",
+        "连接串",
+        "链接串",
+        "jdbc",
+        "datasource",
+        "secret",
     )
     DIAGNOSIS_KEYWORDS = (
         "为什么",
@@ -96,7 +127,76 @@ class IntentRouter(RouterBase):
         "生成",
     )
 
+    # ------------------------------------------------------------------
+    # Public route() — orchestrates rule → confidence → LLM escalation.
+    # ------------------------------------------------------------------
     async def route(self, request: ChatRequest) -> RouteDecision:
+        rule_decision = await self._route_by_rules(request)
+        text = request.message.lower().strip()
+
+        # Confidence is attached only if the rule path did not already set it
+        # (some branches may explicitly set a value; default from schema is 1.0).
+        confidence = self._score_confidence(text, rule_decision)
+        if rule_decision.confidence == 1.0 and confidence < 1.0:
+            rule_decision = rule_decision.model_copy(
+                update={"confidence": confidence, "source": "keyword"}
+            )
+
+        if rule_decision.confidence < self.LLM_ESCALATION_THRESHOLD:
+            llm_decision = await self._route_with_llm(request)
+            if llm_decision is not None:
+                # Take whichever has higher confidence; tag as llm-sourced.
+                llm_decision = llm_decision.model_copy(
+                    update={
+                        "source": "llm",
+                        # If model didn't give a confidence, default to 0.7 —
+                        # above escalation threshold but below a rule hit.
+                        "confidence": llm_decision.confidence if llm_decision.confidence != 1.0 else 0.7,
+                    }
+                )
+                if llm_decision.confidence >= rule_decision.confidence:
+                    logger.info(
+                        "router_llm_escalation_used",
+                        rule_conf=rule_decision.confidence,
+                        llm_conf=llm_decision.confidence,
+                        rule_route=str(rule_decision.route),
+                        llm_route=str(llm_decision.route),
+                    )
+                    return llm_decision
+        return rule_decision
+
+    def _score_confidence(self, text: str, decision: RouteDecision) -> float:
+        """Score how unambiguous the keyword routing was.
+
+        Strategy: count how many distinct intent categories had any hit. If
+        only one category matched, we are confident; if two+ matched, the
+        signal is mixed; if zero matched (default_fallback rationale), even
+        less.
+        """
+        if decision.rationale == "default_fallback":
+            return 0.30
+
+        categories = [
+            self.INDEX_KEYWORDS,
+            self.DIAGNOSIS_KEYWORDS,
+            self.RESTART_KEYWORDS,
+            self.SCALE_KEYWORDS,
+            self.ROLLBACK_KEYWORDS,
+            self.MUTATION_KEYWORDS,
+            self.KNOWLEDGE_KEYWORDS,
+            self.PIPELINE_CREATE_KEYWORDS,
+        ]
+        hits = sum(1 for cat in categories if self._contains_any(text, cat))
+        if hits == 0:
+            # Rule path returned something non-default (context-driven) but
+            # no keyword evidence — treat as medium-low.
+            return 0.55
+        if hits == 1:
+            return 0.90   # unambiguous single category
+        # Two or more categories matched → ambiguous, escalate.
+        return 0.55
+
+    async def _route_by_rules(self, request: ChatRequest) -> RouteDecision:
         text = request.message.lower().strip()
         ctx = request.context or {}
 
@@ -146,6 +246,13 @@ class IntentRouter(RouterBase):
                 intent=IntentType.KNOWLEDGE_QA,
                 route=AgentRoute.KNOWLEDGE,
                 rationale="matched_knowledge_keywords",
+            )
+
+        if self._contains_any(text, self.CONFIG_QUERY_KEYWORDS):
+            return RouteDecision(
+                intent=IntentType.K8S_STATUS,
+                route=AgentRoute.READ_ONLY_OPS,
+                rationale="matched_config_query_keywords",
             )
 
         if self._contains_any(text, self.DIAGNOSIS_KEYWORDS):

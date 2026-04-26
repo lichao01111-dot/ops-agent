@@ -42,6 +42,26 @@ BUILTIN_TOOL_META: dict[str, dict[str, Any]] = {
         "route_affinity": [AgentRoute.READ_ONLY_OPS, AgentRoute.DIAGNOSIS],
         "side_effect": False,
     },
+    "get_configmap": {
+        "tags": ["k8s", "configmap", "配置", "datasource", "jdbc", "database", "连接串"],
+        "route_affinity": [AgentRoute.READ_ONLY_OPS],
+        "side_effect": False,
+    },
+    "get_secret": {
+        "tags": ["k8s", "secret", "配置", "datasource", "jdbc", "database", "连接串"],
+        "route_affinity": [AgentRoute.READ_ONLY_OPS],
+        "side_effect": False,
+    },
+    "get_deployment_config_refs": {
+        "tags": ["k8s", "deployment", "configmap", "secret", "envFrom", "env"],
+        "route_affinity": [AgentRoute.READ_ONLY_OPS],
+        "side_effect": False,
+    },
+    "get_deployment_env": {
+        "tags": ["k8s", "deployment", "env", "jdbc", "datasource", "database"],
+        "route_affinity": [AgentRoute.READ_ONLY_OPS],
+        "side_effect": False,
+    },
     "get_service_info": {
         "tags": ["k8s", "service", "endpoint", "svc"],
         "route_affinity": [AgentRoute.READ_ONLY_OPS, AgentRoute.DIAGNOSIS],

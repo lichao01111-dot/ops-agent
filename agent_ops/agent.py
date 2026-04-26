@@ -12,6 +12,7 @@ Architecture (v2, see docs/architecture-deep-dive.md §9):
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any, AsyncIterator, Awaitable, Callable
 
@@ -30,6 +31,13 @@ from agent_kernel.schemas import (
 )
 from agent_kernel.session import SessionStore
 from agent_kernel.tools.mcp_gateway import MCPClient
+from agent_kernel.tools.middleware import (
+    InvocationContext,
+    Middleware,
+    build_default_chain,
+    run_chain,
+)
+from agent_kernel.tools.invoker import ToolInvoker
 from agent_kernel.tools.registry import ToolRegistry
 from agent_ops.risk_policy import OpsApprovalPolicy
 from agent_ops.executors import (
@@ -52,6 +60,18 @@ logger = structlog.get_logger()
 
 EventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 
+SECRET_VALUE_TOKENS = (
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "token",
+    "apikey",
+    "api_key",
+    "access_key",
+    "private_key",
+)
+
 class OpsAgent(BaseAgent):
     """Planner-driven OpsAgent orchestrator."""
 
@@ -62,30 +82,55 @@ class OpsAgent(BaseAgent):
         tool_registry: ToolRegistry,
         audit_logger: AuditLogger,
         mcp_client: MCPClient | None = None,
+        middlewares: list[Middleware] | None = None,
     ):
         local_session_store = session_store
         self.tool_registry = tool_registry
         self.mcp_client = mcp_client
         self.router = IntentRouter()
+        # Non-functional envelope: timeout / retry / circuit / idempotency /
+        # cost-budget / schema-version / metrics. Built once and reused for
+        # every tool invocation. Callers can inject a custom chain for tests
+        # or swap backends for Redis in production.
+        self.middlewares: list[Middleware] = (
+            middlewares if middlewares is not None else build_default_chain()
+        )
         self.planner = OpsPlanner(router=self.router)
         self.approval_policy = OpsApprovalPolicy()
         self.topology = get_topology()
 
+        # Per-Executor ToolInvoker: each Executor holds a minimum-privilege
+        # handle instead of the raw bound ``_invoke_tool``. The invoker
+        # * rejects unregistered tool names,
+        # * enforces ``allowed_routes`` per caller identity,
+        # * strips unrecognised kwargs before delegating to ``_invoke_tool``.
+        # The invoker is awaitable (``__call__``), so executors keep calling
+        # ``self.invoke_tool(name, args, event_callback, ...)`` unchanged.
+        def _mk_invoker(caller: str, allowed: tuple[str, ...]) -> ToolInvoker:
+            return ToolInvoker.from_bound(
+                self._invoke_tool,
+                get_spec=self.tool_registry.get_spec,
+                caller=caller,
+                allowed_routes=allowed,
+            )
+
         # Instantiate executors
         self.knowledge_executor = KnowledgeExecutor(
-            invoke_tool=self._invoke_tool,
+            # knowledge → both query_knowledge (route=KNOWLEDGE) AND
+            # index_documents (route=MUTATION, admin-only, gated by approval)
+            invoke_tool=_mk_invoker("knowledge_executor", ("knowledge", "mutation")),
             session_store=local_session_store,
         )
         self.read_only_executor = ReadOnlyOpsExecutor(
-            invoke_tool=self._invoke_tool,
+            invoke_tool=_mk_invoker("read_only_executor", ("read_only_ops",)),
             session_store=local_session_store,
         )
         self.mutation_executor = MutationExecutor(
-            invoke_tool=self._invoke_tool,
+            invoke_tool=_mk_invoker("mutation_executor", ("mutation",)),
             session_store=local_session_store,
         )
         self.diagnosis_executor = DiagnosisExecutor(
-            invoke_tool=self._invoke_tool,
+            invoke_tool=_mk_invoker("diagnosis_executor", ("diagnosis",)),
             llm_provider=llm_gateway.get_main_model,
             tool_retriever=self.tool_registry.retrieve,
             topology=self.topology,
@@ -93,11 +138,13 @@ class OpsAgent(BaseAgent):
             hint_builder=self._build_diagnosis_hints,
         )
         self.verification_executor = VerificationExecutor(
-            invoke_tool=self._invoke_tool,
+            # verification may also invoke rollback (route=MUTATION) on its
+            # own auto-approval contract — allow both.
+            invoke_tool=_mk_invoker("verification_executor", ("verification", "mutation")),
             session_store=local_session_store,
         )
         self.investigator_executor = InvestigatorExecutor(
-            invoke_tool=self._invoke_tool,
+            invoke_tool=_mk_invoker("investigator_executor", ("diagnosis",)),
             session_store=local_session_store,
         )
 
@@ -189,11 +236,30 @@ class OpsAgent(BaseAgent):
 
         try:
             handler = self.tool_registry.get_handler(tool_name)
-            if handler is None:
+            if spec is None or handler is None:
                 raise KeyError(f"tool not registered: {tool_name}")
             if not hasattr(handler, "ainvoke"):
                 raise TypeError(f"tool handler for {tool_name} does not implement ainvoke")
-            output = await handler.ainvoke(args)
+            route_value = getattr(route, "value", route) if route is not None else ""
+            ctx = InvocationContext(
+                tool_name=tool_name,
+                spec=spec,
+                arguments=args,
+                session_id=session_id,
+                user_id=user_id,
+                route=str(route_value or ""),
+                idempotency_key=approval_receipt.receipt_id if approval_receipt else "",
+            )
+
+            async def _terminal() -> Any:
+                return await handler.ainvoke(args)
+
+            output = await run_chain(getattr(self, "middlewares", []), ctx, _terminal)
+            if tool_name == "get_secret":
+                output = json.dumps(
+                    self._sanitize_secret_payload(self._load_json(str(output))),
+                    ensure_ascii=False,
+                )
             event.status = ToolCallStatus.SUCCESS
             event.result = self._truncate_text(str(output), 500)
         except Exception as exc:
@@ -295,6 +361,7 @@ class OpsAgent(BaseAgent):
         approval_receipt_id: str = "",
     ) -> None:
         payload = self._load_json(output)
+        payload = self._sanitize_artifact_payload(tool_name, payload)
         payload.update(
             {
                 "step_id": step_id,
@@ -312,6 +379,46 @@ class OpsAgent(BaseAgent):
             approval_receipt_id=approval_receipt_id,
             payload=payload,
         )
+
+    def _sanitize_artifact_payload(self, tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if tool_name != "get_secret":
+            return payload
+        return self._sanitize_secret_payload(payload, redact_all_entries=True)
+
+    def _sanitize_secret_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        redact_all_entries: bool = False,
+    ) -> dict[str, Any]:
+        sanitized = dict(payload)
+        secrets = []
+        for secret in sanitized.get("secrets") or []:
+            if not isinstance(secret, dict):
+                secrets.append(secret)
+                continue
+            item = dict(secret)
+            item.pop("data", None)
+            matched_entries = item.get("matched_entries")
+            if isinstance(matched_entries, dict):
+                item["matched_entries"] = {
+                    str(key): (
+                        "***REDACTED***"
+                        if redact_all_entries
+                        else self._redact_secret_value(str(key), str(value))
+                    )
+                    for key, value in matched_entries.items()
+                }
+            secrets.append(item)
+        sanitized["secrets"] = secrets
+        return sanitized
+
+    @staticmethod
+    def _redact_secret_value(key: str, value: str) -> str:
+        lowered = key.lower()
+        if any(token in lowered for token in SECRET_VALUE_TOKENS):
+            return "***REDACTED***"
+        return re.sub(r"://([^:/@\s]+):([^@\s]+)@", r"://\1:***@", value)
 
     def _summarize_tool_output(self, tool_name: str, payload: dict[str, Any]) -> str:
         if payload.get("error"):

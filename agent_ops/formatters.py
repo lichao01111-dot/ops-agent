@@ -64,6 +64,58 @@ def format_single_read_only_result(tool_name: str, payload: dict[str, Any]) -> s
                 f"type={first.get('type')} cluster_ip={first.get('cluster_ip')}"
             )
         return "Service 查询完成，但未找到匹配项。"
+    if tool_name == "get_configmap":
+        configmaps = payload.get("configmaps", [])
+        if configmaps:
+            first = configmaps[0]
+            matched_keys = first.get("matched_keys") or []
+            cluster = payload.get("cluster") or "default-context"
+            if matched_keys:
+                return (
+                    f"ConfigMap 查询完成：cluster={cluster} "
+                    f"namespace={payload.get('namespace')} "
+                    f"name={first.get('name')} "
+                    f"matched_keys={', '.join(matched_keys[:5])}"
+                )
+            return (
+                f"ConfigMap 查询完成：cluster={cluster} "
+                f"namespace={payload.get('namespace')} "
+                f"name={first.get('name')}，但未匹配到目标配置项。"
+            )
+        return "ConfigMap 查询完成，但未找到匹配项。"
+    if tool_name == "get_secret":
+        secrets = payload.get("secrets", [])
+        if secrets:
+            first = secrets[0]
+            matched_keys = first.get("matched_keys") or []
+            cluster = payload.get("cluster") or "default-context"
+            if matched_keys:
+                return (
+                    f"Secret 查询完成：cluster={cluster} "
+                    f"namespace={payload.get('namespace')} "
+                    f"name={first.get('name')} "
+                    f"matched_keys={', '.join(matched_keys[:5])}"
+                )
+            return (
+                f"Secret 查询完成：cluster={cluster} "
+                f"namespace={payload.get('namespace')} "
+                f"name={first.get('name')}，但未匹配到目标配置项。"
+            )
+        return "Secret 查询完成，但未找到匹配项。"
+    if tool_name == "get_deployment_config_refs":
+        refs = payload.get("refs", {})
+        return (
+            f"Deployment 引用查询完成：deployment={payload.get('deployment')} "
+            f"configmaps={len(refs.get('configmaps', []))} "
+            f"secrets={len(refs.get('secrets', []))} "
+            f"env={len(refs.get('env', []))}"
+        )
+    if tool_name == "get_deployment_env":
+        entries = payload.get("entries", [])
+        return (
+            f"Deployment env 查询完成：deployment={payload.get('deployment')} "
+            f"matched_entries={len(entries)}"
+        )
     if tool_name == "get_pod_logs":
         return (
             f"Pod 日志已获取：pod={payload.get('pod_name')} "

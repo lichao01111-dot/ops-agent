@@ -5,6 +5,8 @@ import json
 from types import SimpleNamespace
 import pytest
 
+from langchain_core.messages import HumanMessage
+
 from agent_kernel.memory import MemorySchema
 from agent_kernel.audit import AuditLogger, create_audit_logger
 from agent_kernel.schemas import (
@@ -33,6 +35,8 @@ from agent_ops.schemas import (
     MemoryLayer,
     ServiceNode,
 )
+from agent_ops.extractors import extract_cluster_name
+from agent_ops.executors.read_only import ReadOnlyOpsExecutor
 
 
 # ===== Audit Logger Tests =====
@@ -295,6 +299,15 @@ class TestIntentRouter:
         assert decision.route == AgentRoute.MUTATION
         assert decision.requires_approval is True
 
+    @pytest.mark.asyncio
+    async def test_route_configmap_query_request(self):
+        router = IntentRouter()
+        decision = await router.route(
+            ChatRequest(message="帮我看一下 test 服务 configmap 中数据库连接串配置是什么")
+        )
+        assert decision.route == AgentRoute.READ_ONLY_OPS
+        assert decision.intent == IntentType.K8S_STATUS
+
 
 # ===== Jenkins Tool Tests =====
 
@@ -349,6 +362,14 @@ class TestConfig:
         )
         assert s.allowed_namespaces == ["dev", "staging", "default"]
         assert s.readonly_namespaces == ["prod", "production"]
+
+
+class TestExtractors:
+
+    def test_extract_cluster_name_normalizes_multi_token_cluster(self):
+        store = InMemorySessionStore(memory_schema=OPS_MEMORY_SCHEMA)
+        cluster = extract_cluster_name("帮我看一下 cdms sit2 的k8s 集群", {}, store, "s1")
+        assert cluster == "cdms-sit2"
 
 
 # ===== Planner Tests =====
@@ -490,6 +511,361 @@ class TestToolRegistry:
         assert any(s.name == "query_knowledge" for s in diagnosis_specs)
 
 
+class TestReadOnlyOpsConfigLookup:
+
+    @pytest.mark.asyncio
+    async def test_config_lookup_uses_knowledge_then_reads_configmap(self):
+        store = InMemorySessionStore(memory_schema=OPS_MEMORY_SCHEMA)
+        calls = []
+
+        async def fake_invoke_tool(tool_name, args, event_callback=None, **kwargs):
+            calls.append((tool_name, args))
+            event = ToolCallEvent(
+                tool_name=tool_name,
+                action=tool_name,
+                status=ToolCallStatus.SUCCESS,
+                result="ok",
+            )
+            if tool_name == "query_knowledge":
+                return event, json.dumps(
+                    {
+                        "answer_status": "found",
+                        "results": [
+                            {
+                                "content": (
+                                    "cluster: cdms-sit2\n"
+                                    "namespace: staging\n"
+                                    "configmap: test-config\n"
+                                    "service: test"
+                                ),
+                                "source": "runbook.md",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+            if tool_name == "get_configmap":
+                return event, json.dumps(
+                    {
+                        "cluster": "cdms-sit2",
+                        "namespace": "staging",
+                        "configmaps": [
+                            {
+                                "name": "test-config",
+                                "matched_keys": ["spring.datasource.url"],
+                                "matched_entries": {
+                                    "spring.datasource.url": "jdbc:mysql://mysql.staging:3306/test"
+                                },
+                                "data": {
+                                    "spring.datasource.url": "jdbc:mysql://mysql.staging:3306/test"
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+            raise AssertionError(f"unexpected tool: {tool_name}")
+
+        executor = ReadOnlyOpsExecutor(invoke_tool=fake_invoke_tool, session_store=store)
+        state = {
+            "messages": [HumanMessage(content="帮我看一下 cdms sit2 的k8s 集群 test 服务 的configmap 中 数据库的链接串的配置是什么")],
+            "context": {},
+            "session_id": "cfg-s1",
+            "user_id": "tester",
+        }
+
+        result = await executor.execute(state)
+        assert calls[0][0] == "query_knowledge"
+        assert calls[1][0] == "get_configmap"
+        assert calls[1][1]["cluster"] == "cdms-sit2"
+        assert calls[1][1]["namespace"] == "staging"
+        assert calls[1][1]["name"] == "test-config"
+        assert "spring.datasource.url" in result["final_message"]
+
+    @pytest.mark.asyncio
+    async def test_config_lookup_falls_back_to_deployment_env(self):
+        store = InMemorySessionStore(memory_schema=OPS_MEMORY_SCHEMA)
+        calls = []
+
+        async def fake_invoke_tool(tool_name, args, event_callback=None, **kwargs):
+            calls.append((tool_name, args))
+            event = ToolCallEvent(
+                tool_name=tool_name,
+                action=tool_name,
+                status=ToolCallStatus.SUCCESS,
+                result="ok",
+            )
+            if tool_name == "query_knowledge":
+                return event, json.dumps(
+                    {
+                        "answer_status": "found",
+                        "results": [
+                            {
+                                "content": (
+                                    "cluster: cdms-sit2\n"
+                                    "namespace: staging\n"
+                                    "service: test"
+                                ),
+                                "source": "runbook.md",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+            if tool_name == "get_configmap":
+                return event, json.dumps(
+                    {
+                        "cluster": "cdms-sit2",
+                        "namespace": "staging",
+                        "configmaps": [
+                            {
+                                "name": "test-config",
+                                "matched_keys": [],
+                                "matched_entries": {},
+                                "data": {"feature.flag": "true"},
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+            if tool_name == "get_deployment_config_refs":
+                return event, json.dumps(
+                    {
+                        "cluster": "cdms-sit2",
+                        "namespace": "staging",
+                        "deployment": "test",
+                        "refs": {"configmaps": [], "secrets": [], "env": []},
+                    },
+                    ensure_ascii=False,
+                )
+            if tool_name == "get_deployment_env":
+                return event, json.dumps(
+                    {
+                        "cluster": "cdms-sit2",
+                        "namespace": "staging",
+                        "deployment": "test",
+                        "entries": [
+                            {
+                                "container": "app",
+                                "name": "SPRING_DATASOURCE_URL",
+                                "value": "jdbc:mysql://mysql.staging:3306/test",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+            raise AssertionError(f"unexpected tool: {tool_name}")
+
+        executor = ReadOnlyOpsExecutor(invoke_tool=fake_invoke_tool, session_store=store)
+        state = {
+            "messages": [HumanMessage(content="帮我看一下 cdms sit2 的k8s 集群 test 服务 的数据库连接串是什么")],
+            "context": {},
+            "session_id": "cfg-s2",
+            "user_id": "tester",
+        }
+
+        result = await executor.execute(state)
+        assert [name for name, _ in calls] == [
+            "query_knowledge",
+            "get_configmap",
+            "get_deployment_config_refs",
+            "get_deployment_env",
+        ]
+        assert "SPRING_DATASOURCE_URL=jdbc:mysql://mysql.staging:3306/test" in result["final_message"]
+        assert store.resolve_memory_value(
+            "cfg-s2",
+            "deployment_env_matches",
+            [MemoryLayer.OBSERVATIONS],
+        )
+
+    @pytest.mark.asyncio
+    async def test_config_lookup_falls_back_to_secret_refs(self):
+        store = InMemorySessionStore(memory_schema=OPS_MEMORY_SCHEMA)
+        calls = []
+
+        async def fake_invoke_tool(tool_name, args, event_callback=None, **kwargs):
+            calls.append((tool_name, args))
+            event = ToolCallEvent(
+                tool_name=tool_name,
+                action=tool_name,
+                status=ToolCallStatus.SUCCESS,
+                result="ok",
+            )
+            if tool_name == "query_knowledge":
+                return event, json.dumps(
+                    {
+                        "answer_status": "found",
+                        "results": [
+                            {
+                                "content": "cluster: cdms-sit2\nnamespace: staging\nservice: test",
+                                "source": "runbook.md",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+            if tool_name == "get_configmap":
+                if args.get("name") == "db-config":
+                    raise AssertionError("should read secret fallback before unrelated configmap match")
+                return event, json.dumps(
+                    {
+                        "cluster": "cdms-sit2",
+                        "namespace": "staging",
+                        "configmaps": [
+                            {
+                                "name": "test-config",
+                                "matched_keys": [],
+                                "matched_entries": {},
+                                "data": {"feature.flag": "true"},
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+            if tool_name == "get_deployment_config_refs":
+                return event, json.dumps(
+                    {
+                        "cluster": "cdms-sit2",
+                        "namespace": "staging",
+                        "deployment": "test",
+                        "refs": {
+                            "configmaps": [],
+                            "secrets": [{"container": "app", "name": "db-secret", "key": "url", "env_name": "DB_URL"}],
+                            "env": [],
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+            if tool_name == "get_deployment_env":
+                return event, json.dumps(
+                    {
+                        "cluster": "cdms-sit2",
+                        "namespace": "staging",
+                        "deployment": "test",
+                        "entries": [],
+                    },
+                    ensure_ascii=False,
+                )
+            if tool_name == "get_secret":
+                return event, json.dumps(
+                    {
+                        "cluster": "cdms-sit2",
+                        "namespace": "staging",
+                        "secrets": [
+                            {
+                                "name": "db-secret",
+                                "matched_keys": ["url"],
+                                "matched_entries": {"url": "jdbc:mysql://user:***@mysql.staging:3306/test"},
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+            raise AssertionError(f"unexpected tool: {tool_name}")
+
+        executor = ReadOnlyOpsExecutor(invoke_tool=fake_invoke_tool, session_store=store)
+        state = {
+            "messages": [HumanMessage(content="帮我看一下 cdms sit2 的k8s 集群 test 服务 的数据库连接串是什么")],
+            "context": {},
+            "session_id": "cfg-s3",
+            "user_id": "tester",
+        }
+
+        result = await executor.execute(state)
+        assert [name for name, _ in calls] == [
+            "query_knowledge",
+            "get_configmap",
+            "get_deployment_config_refs",
+            "get_deployment_env",
+            "get_secret",
+        ]
+        assert "Deployment 关联 Secret 命中" in result["final_message"]
+        assert "url=jdbc:mysql://user:***@mysql.staging:3306/test" in result["final_message"]
+        assert store.resolve_memory_value("cfg-s3", "secret_name", [MemoryLayer.OBSERVATIONS]) == "db-secret"
+
+
+class TestK8sConfigMapTool:
+
+    @pytest.mark.asyncio
+    async def test_get_configmap_filters_database_keys(self, monkeypatch):
+        from tools.k8s_tool import get_configmap
+        import tools.k8s_tool as k8s_tool_module
+
+        class FakeConfigMap:
+            def __init__(self, name, data):
+                self.metadata = SimpleNamespace(name=name, labels={"app": "test"})
+                self.data = data
+
+        class FakeCoreV1:
+            def list_namespaced_config_map(self, namespace):
+                assert namespace == "staging"
+                return SimpleNamespace(
+                    items=[
+                        FakeConfigMap(
+                            "test-config",
+                            {
+                                "spring.datasource.url": "jdbc:mysql://mysql.staging:3306/test",
+                                "feature.flag": "true",
+                            },
+                        )
+                    ]
+                )
+
+        monkeypatch.setattr(k8s_tool_module, "_get_k8s_client", lambda cluster="": (FakeCoreV1(), None))
+        monkeypatch.setattr(k8s_tool_module, "_check_namespace_access", lambda namespace, write=False: None)
+
+        result = await get_configmap.ainvoke(
+            {
+                "namespace": "staging",
+                "name_filter": "test",
+                "cluster": "cdms-sit2",
+                "key_filter": "datasource,jdbc",
+            }
+        )
+        payload = json.loads(result)
+        assert payload["cluster"] == "cdms-sit2"
+        assert payload["configmaps"][0]["name"] == "test-config"
+        assert payload["configmaps"][0]["matched_keys"] == ["spring.datasource.url"]
+
+    @pytest.mark.asyncio
+    async def test_get_secret_returns_only_redacted_matches(self, monkeypatch):
+        from tools.k8s_tool import get_secret
+        import tools.k8s_tool as k8s_tool_module
+
+        class FakeSecret:
+            metadata = SimpleNamespace(name="db-secret")
+            type = "Opaque"
+            data = {
+                "password": "czNjcjN0",
+                "url": "amRiYzpteXNxbDovL3VzZXI6cGFzc0BteXNxbC5zdGFnaW5nOjMzMDYvdGVzdA==",
+                "unrelated": "c2hvdWxkLW5vdC1hcHBlYXI=",
+            }
+
+        class FakeCoreV1:
+            def read_namespaced_secret(self, name, namespace):
+                assert name == "db-secret"
+                assert namespace == "staging"
+                return FakeSecret()
+
+        monkeypatch.setattr(k8s_tool_module, "_get_k8s_client", lambda cluster="": (FakeCoreV1(), None))
+        monkeypatch.setattr(k8s_tool_module, "_check_namespace_access", lambda namespace, write=False: None)
+
+        result = await get_secret.ainvoke(
+            {
+                "namespace": "staging",
+                "name": "db-secret",
+                "cluster": "cdms-sit2",
+                "key_filter": "password,url",
+            }
+        )
+        payload = json.loads(result)
+        first = payload["secrets"][0]
+        assert "data" not in first
+        assert first["matched_entries"]["password"] == "***REDACTED***"
+        assert first["matched_entries"]["url"] == "jdbc:mysql://user:***@mysql.staging:3306/test"
+        assert "unrelated" not in first["matched_entries"]
+
+
 # ===== Service Topology Tests =====
 
 class TestServiceTopology:
@@ -623,6 +999,87 @@ class TestAgentRuntimeContracts:
         assert captured["args"] == {"value": 42}
         assert event.status == ToolCallStatus.SUCCESS
         assert json.loads(output)["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_invoke_tool_runs_middleware_chain(self):
+        agent = OpsAgent.__new__(OpsAgent)
+        agent.session_store = create_session_store(memory_schema=OPS_MEMORY_SCHEMA)
+        agent.approval_policy = OpsApprovalPolicy()
+        agent.tool_registry = create_tool_registry()
+        agent.audit_logger = create_audit_logger()
+        seen = {}
+
+        class FakeHandler:
+            name = "test_middleware_tool"
+            description = "test middleware"
+
+            async def ainvoke(self, args):
+                return json.dumps({"status": "ok"}, ensure_ascii=False)
+
+        class RecorderMiddleware:
+            async def __call__(self, ctx, next_):
+                seen["tool"] = ctx.tool_name
+                seen["session_id"] = ctx.session_id
+                return await next_()
+
+        agent.tool_registry.register_local(FakeHandler(), route_affinity=[AgentRoute.KNOWLEDGE])
+        agent.middlewares = [RecorderMiddleware()]
+
+        event, output = await agent._invoke_tool(
+            "test_middleware_tool",
+            {"value": 1},
+            session_id="mw-s1",
+            route=AgentRoute.KNOWLEDGE,
+        )
+
+        assert event.status == ToolCallStatus.SUCCESS
+        assert json.loads(output)["status"] == "ok"
+        assert seen == {"tool": "test_middleware_tool", "session_id": "mw-s1"}
+
+    @pytest.mark.asyncio
+    async def test_secret_artifact_drops_raw_data_and_redacts_entries(self):
+        agent = OpsAgent.__new__(OpsAgent)
+        agent.session_store = create_session_store(memory_schema=OPS_MEMORY_SCHEMA)
+        agent.approval_policy = OpsApprovalPolicy()
+        agent.tool_registry = create_tool_registry()
+        agent.audit_logger = create_audit_logger()
+
+        class FakeHandler:
+            async def ainvoke(self, args):
+                return json.dumps(
+                    {
+                        "secrets": [
+                            {
+                                "name": "db-secret",
+                                "matched_keys": ["password"],
+                                "matched_entries": {"password": "raw-password"},
+                                "data": {"password": "raw-password"},
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+
+        agent.tool_registry._entries["get_secret"] = SimpleNamespace(
+            spec=SimpleNamespace(side_effect=False),
+            handler=FakeHandler(),
+        )
+
+        event, output = await agent._invoke_tool(
+            "get_secret",
+            {"namespace": "staging", "name": "db-secret"},
+            session_id="secret-s1",
+            route=AgentRoute.READ_ONLY_OPS,
+        )
+
+        assert event.status == ToolCallStatus.SUCCESS
+        output_secret = json.loads(output)["secrets"][0]
+        assert "data" not in output_secret
+        assert output_secret["matched_entries"] == {"password": "***REDACTED***"}
+        artifact = agent.session_store.get_recent_artifacts("secret-s1", limit=1)[0]
+        secret_payload = artifact.payload["secrets"][0]
+        assert "data" not in secret_payload
+        assert secret_payload["matched_entries"] == {"password": "***REDACTED***"}
 
     @pytest.mark.asyncio
     async def test_invoke_tool_emits_audit_entry_with_sanitized_params(self):

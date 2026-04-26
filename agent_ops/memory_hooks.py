@@ -1,8 +1,9 @@
 import json
+import re
 from typing import TYPE_CHECKING
 
 from agent_kernel.session import SessionStore
-from agent_ops.extractors import extract_namespace, extract_service_name
+from agent_ops.extractors import extract_cluster_name, extract_namespace, extract_service_name
 from agent_ops.formatters import load_json
 from agent_ops.schemas import AgentIdentity, MemoryLayer
 
@@ -49,6 +50,30 @@ def update_memory_from_knowledge(
             value=namespace,
             source="query_knowledge",
             confidence=0.85,
+        )
+
+    cluster = extract_cluster_name(text_blob, {}, session_store, session_id)
+    if cluster:
+        session_store.write_memory_item(
+            session_id,
+            writer=AgentIdentity.KNOWLEDGE,
+            layer=MemoryLayer.FACTS,
+            key="cluster",
+            value=cluster,
+            source="query_knowledge",
+            confidence=0.75,
+        )
+
+    match = re.search(r"configmap\s*[:：]?\s*([a-zA-Z0-9][\w.-]*)", text_blob, re.IGNORECASE)
+    if match:
+        session_store.write_memory_item(
+            session_id,
+            writer=AgentIdentity.KNOWLEDGE,
+            layer=MemoryLayer.FACTS,
+            key="configmap_name",
+            value=match.group(1),
+            source="query_knowledge",
+            confidence=0.7,
         )
 
     if sources:
@@ -151,6 +176,145 @@ def update_memory_from_tool_output(
                 value=first_message.replace("\n", " ")[:160] + "..." if len(first_message) > 160 else first_message.replace("\n", " "),
                 source=tool_name,
                 confidence=0.7,
+            )
+    elif tool_name == "get_configmap":
+        namespace = payload.get("namespace")
+        if namespace:
+            session_store.write_memory_item(
+                session_id,
+                writer=AgentIdentity.READ_OPS,
+                layer=MemoryLayer.OBSERVATIONS,
+                key="namespace",
+                value=namespace,
+                source=tool_name,
+                confidence=0.95,
+            )
+        cluster = payload.get("cluster")
+        if cluster:
+            session_store.write_memory_item(
+                session_id,
+                writer=AgentIdentity.READ_OPS,
+                layer=MemoryLayer.OBSERVATIONS,
+                key="cluster",
+                value=cluster,
+                source=tool_name,
+                confidence=0.9,
+            )
+        configmaps = payload.get("configmaps", [])
+        if configmaps:
+            first = configmaps[0]
+            session_store.write_memory_item(
+                session_id,
+                writer=AgentIdentity.READ_OPS,
+                layer=MemoryLayer.OBSERVATIONS,
+                key="configmap_name",
+                value=first.get("name", ""),
+                source=tool_name,
+                confidence=0.95,
+            )
+            matched_keys = first.get("matched_keys") or []
+            if matched_keys:
+                session_store.write_memory_item(
+                    session_id,
+                    writer=AgentIdentity.READ_OPS,
+                    layer=MemoryLayer.OBSERVATIONS,
+                    key="configmap_matched_keys",
+                    value=matched_keys,
+                    source=tool_name,
+                    confidence=0.85,
+                )
+    elif tool_name == "get_secret":
+        namespace = payload.get("namespace")
+        if namespace:
+            session_store.write_memory_item(
+                session_id,
+                writer=AgentIdentity.READ_OPS,
+                layer=MemoryLayer.OBSERVATIONS,
+                key="namespace",
+                value=namespace,
+                source=tool_name,
+                confidence=0.95,
+            )
+        cluster = payload.get("cluster")
+        if cluster:
+            session_store.write_memory_item(
+                session_id,
+                writer=AgentIdentity.READ_OPS,
+                layer=MemoryLayer.OBSERVATIONS,
+                key="cluster",
+                value=cluster,
+                source=tool_name,
+                confidence=0.9,
+            )
+        secrets = payload.get("secrets", [])
+        if secrets:
+            first = secrets[0]
+            session_store.write_memory_item(
+                session_id,
+                writer=AgentIdentity.READ_OPS,
+                layer=MemoryLayer.OBSERVATIONS,
+                key="secret_name",
+                value=first.get("name", ""),
+                source=tool_name,
+                confidence=0.95,
+            )
+    elif tool_name == "get_deployment_config_refs":
+        refs = payload.get("refs", {})
+        configmaps = refs.get("configmaps") or []
+        secrets = refs.get("secrets") or []
+        if configmaps:
+            session_store.write_memory_item(
+                session_id,
+                writer=AgentIdentity.READ_OPS,
+                layer=MemoryLayer.OBSERVATIONS,
+                key="deployment_configmap_refs",
+                value=configmaps,
+                source=tool_name,
+                confidence=0.9,
+            )
+        if secrets:
+            session_store.write_memory_item(
+                session_id,
+                writer=AgentIdentity.READ_OPS,
+                layer=MemoryLayer.OBSERVATIONS,
+                key="deployment_secret_refs",
+                value=secrets,
+                source=tool_name,
+                confidence=0.9,
+            )
+    elif tool_name == "get_deployment_env":
+        namespace = payload.get("namespace")
+        if namespace:
+            session_store.write_memory_item(
+                session_id,
+                writer=AgentIdentity.READ_OPS,
+                layer=MemoryLayer.OBSERVATIONS,
+                key="namespace",
+                value=namespace,
+                source=tool_name,
+                confidence=0.95,
+            )
+        cluster = payload.get("cluster")
+        if cluster:
+            session_store.write_memory_item(
+                session_id,
+                writer=AgentIdentity.READ_OPS,
+                layer=MemoryLayer.OBSERVATIONS,
+                key="cluster",
+                value=cluster,
+                source=tool_name,
+                confidence=0.9,
+            )
+        entries = payload.get("entries") or []
+        if entries:
+            session_store.write_memory_item(
+                session_id,
+                writer=AgentIdentity.READ_OPS,
+                layer=MemoryLayer.OBSERVATIONS,
+                key="deployment_env_matches",
+                value=entries,
+                source=tool_name,
+                confidence=0.85,
             )
     elif tool_name == "diagnose_pod":
         issues = payload.get("issues", [])

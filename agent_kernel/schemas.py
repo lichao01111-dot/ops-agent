@@ -130,6 +130,15 @@ class RouteDecision(BaseModel):
     requires_approval: bool = False
     rationale: str = ""
 
+    # --- confidence / fallback (added per arch review 2026-04) -----------------
+    # Keyword rule hits → 0.9 by default; LLM fallback → model-provided or 0.6.
+    # Values below ``router.llm_escalation_threshold`` trigger an LLM second-opinion
+    # in IntentRouter. Kept optional with default=1.0 so existing tests that
+    # construct RouteDecision directly keep working.
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    # Decision provenance: "keyword" | "llm" | "context" | "default_fallback"
+    source: str = "keyword"
+
 
 # ===== Tool Registration =====
 
@@ -199,6 +208,34 @@ class ToolSource(str, Enum):
     MCP = "mcp"
 
 
+class RetryPolicy(BaseModel):
+    """Per-tool retry policy. Exponential backoff between attempts."""
+    max_attempts: int = 1             # 1 = no retry
+    backoff_base_s: float = 0.5
+    backoff_factor: float = 2.0
+    retry_on_exceptions: list[str] = Field(default_factory=list)  # class-name match
+    # If True and side_effect=True, retries are DISABLED regardless of
+    # max_attempts — unless an idempotency_key is provided on the call.
+    idempotent: bool = False
+
+
+class ReliabilityPolicy(BaseModel):
+    """Non-functional envelope applied around every tool invocation.
+
+    Each field has a safe default so existing tools behave as before.
+    Middlewares (``agent_kernel.tools.middleware``) read these values.
+    """
+    timeout_s: float | None = 30.0           # None = no timeout
+    retry: RetryPolicy = Field(default_factory=RetryPolicy)
+    # Circuit-breaker: after N consecutive failures, reject fast for cool_down_s.
+    circuit_fail_threshold: int = 0           # 0 = disabled
+    circuit_cool_down_s: float = 60.0
+    # Cost ceiling (0 = unlimited). Middleware deducts from session budget.
+    cost_ceiling_tokens: int = 0
+    # p95 SLO target in ms; emitted as Prometheus label, not enforced.
+    slo_p95_ms: int = 0
+
+
 class ToolSpec(BaseModel):
     name: str
     description: str
@@ -207,5 +244,11 @@ class ToolSpec(BaseModel):
     side_effect: bool = False
     source: ToolSource = ToolSource.LOCAL
     parameters_schema: dict[str, Any] = Field(default_factory=dict)
+
+    # --- non-functional envelope (added per arch review 2026-04) --------------
+    reliability: ReliabilityPolicy = Field(default_factory=ReliabilityPolicy)
+    # Schema version for MCP drift detection. Middleware compares on invocation
+    # and logs an audit event if the remote advertises a newer version.
+    schema_version: str = "1.0.0"
 
     model_config = {"arbitrary_types_allowed": True}

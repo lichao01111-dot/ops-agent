@@ -8,6 +8,8 @@ Kubernetes 运维 Tool
 from __future__ import annotations
 
 import json
+import base64
+import re
 import structlog
 from langchain_core.tools import tool
 
@@ -15,19 +17,73 @@ from config import settings
 
 logger = structlog.get_logger()
 
+SENSITIVE_KEY_TOKENS = (
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "token",
+    "apikey",
+    "api_key",
+    "access_key",
+    "private_key",
+)
 
-def _get_k8s_client():
+
+def _normalize_context_name(value: str) -> str:
+    lowered = value.strip().lower()
+    return re.sub(r"[\s_\-]+", "", lowered)
+
+
+def _resolve_kube_context(k8s_config, requested: str) -> str | None:
+    if not requested:
+        return None
+    try:
+        contexts, current = k8s_config.list_kube_config_contexts(
+            config_file=settings.kubeconfig_path,
+        )
+    except Exception as exc:
+        logger.warning("k8s_list_contexts_failed", error=str(exc))
+        return requested
+
+    exact = requested.strip()
+    normalized = _normalize_context_name(exact)
+    for ctx in contexts or []:
+        name = ctx.get("name", "")
+        if name == exact:
+            return name
+    for ctx in contexts or []:
+        name = ctx.get("name", "")
+        if _normalize_context_name(name) == normalized:
+            return name
+    for ctx in contexts or []:
+        name = ctx.get("name", "")
+        if normalized and normalized in _normalize_context_name(name):
+            return name
+    if current and normalized == _normalize_context_name(current.get("name", "")):
+        return current.get("name")
+    return requested
+
+
+def _get_k8s_client(cluster: str = ""):
     """延迟加载 K8s 客户端，避免没有 kubeconfig 时报错"""
     from kubernetes import client, config as k8s_config
 
     try:
         if settings.kubeconfig_path:
-            k8s_config.load_kube_config(config_file=settings.kubeconfig_path)
+            resolved = _resolve_kube_context(k8s_config, cluster)
+            k8s_config.load_kube_config(
+                config_file=settings.kubeconfig_path,
+                context=resolved or None,
+            )
         else:
             try:
+                if cluster:
+                    raise k8s_config.ConfigException("incluster 模式不支持显式 cluster/context 选择")
                 k8s_config.load_incluster_config()
             except k8s_config.ConfigException:
-                k8s_config.load_kube_config()
+                resolved = _resolve_kube_context(k8s_config, cluster)
+                k8s_config.load_kube_config(context=resolved or None)
     except Exception as e:
         logger.warning("k8s_config_load_failed", error=str(e))
         return None, None
@@ -35,6 +91,13 @@ def _get_k8s_client():
     v1 = client.CoreV1Api()
     apps_v1 = client.AppsV1Api()
     return v1, apps_v1
+
+
+def _redact_secret_value(key: str, value: str) -> str:
+    lowered = key.lower()
+    if any(token in lowered for token in SENSITIVE_KEY_TOKENS):
+        return "***REDACTED***"
+    return re.sub(r"://([^:/@\s]+):([^@\s]+)@", r"://\1:***@", value)
 
 
 def _check_namespace_access(namespace: str, write: bool = False) -> str | None:
@@ -165,6 +228,287 @@ async def get_deployment_status(
 
     except Exception as e:
         return json.dumps({"error": f"查询 Deployment 失败: {str(e)}"})
+
+
+@tool
+async def get_configmap(
+    namespace: str = "default",
+    name: str = "",
+    name_filter: str = "",
+    cluster: str = "",
+    key_filter: str = "",
+) -> str:
+    """查询 K8s ConfigMap，并按 key 过滤感兴趣的配置项。
+
+    Args:
+        namespace: K8s namespace
+        name: ConfigMap 精确名称
+        name_filter: ConfigMap 名称模糊过滤
+        cluster: 可选 kube context / cluster 名称
+        key_filter: 逗号分隔的 key 过滤词，用于筛选数据库链接串等配置
+    """
+    if err := _check_namespace_access(namespace):
+        return json.dumps({"error": err})
+
+    v1, _ = _get_k8s_client(cluster=cluster)
+    if not v1:
+        return json.dumps({"error": "K8s 客户端未配置"})
+
+    filters = [item.strip().lower() for item in key_filter.split(",") if item.strip()]
+
+    try:
+        if name:
+            configmaps = [v1.read_namespaced_config_map(name=name, namespace=namespace)]
+        else:
+            cm_list = v1.list_namespaced_config_map(namespace=namespace)
+            configmaps = []
+            for cm in cm_list.items:
+                cm_name = cm.metadata.name or ""
+                if name_filter and name_filter.lower() not in cm_name.lower():
+                    continue
+                configmaps.append(cm)
+
+        results = []
+        for cm in configmaps:
+            data = cm.data or {}
+            matched_entries = {}
+            for key, value in data.items():
+                haystack = f"{key}\n{value}".lower()
+                if not filters or any(token in haystack for token in filters):
+                    matched_entries[key] = value
+
+            results.append({
+                "name": cm.metadata.name,
+                "namespace": namespace,
+                "cluster": cluster or "",
+                "labels": cm.metadata.labels or {},
+                "matched_keys": list(matched_entries.keys()),
+                "matched_entries": matched_entries,
+                "data": data,
+            })
+
+        return json.dumps(
+            {
+                "namespace": namespace,
+                "cluster": cluster or "",
+                "total_configmaps": len(results),
+                "configmaps": results,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+    except Exception as e:
+        return json.dumps({"error": f"查询 ConfigMap 失败: {str(e)}"})
+
+
+@tool
+async def get_secret(
+    namespace: str = "default",
+    name: str = "",
+    name_filter: str = "",
+    cluster: str = "",
+    key_filter: str = "",
+) -> str:
+    """查询 K8s Secret，并尝试解码匹配的 key。
+
+    Args:
+        namespace: K8s namespace
+        name: Secret 精确名称
+        name_filter: Secret 名称模糊过滤
+        cluster: 可选 kube context / cluster 名称
+        key_filter: 逗号分隔的 key 过滤词
+    """
+    if err := _check_namespace_access(namespace):
+        return json.dumps({"error": err})
+
+    v1, _ = _get_k8s_client(cluster=cluster)
+    if not v1:
+        return json.dumps({"error": "K8s 客户端未配置"})
+
+    filters = [item.strip().lower() for item in key_filter.split(",") if item.strip()]
+
+    def _decode(value: str) -> str:
+        try:
+            return base64.b64decode(value).decode("utf-8")
+        except Exception:
+            return value
+
+    try:
+        if name:
+            secrets = [v1.read_namespaced_secret(name=name, namespace=namespace)]
+        else:
+            sec_list = v1.list_namespaced_secret(namespace=namespace)
+            secrets = []
+            for sec in sec_list.items:
+                sec_name = sec.metadata.name or ""
+                if name_filter and name_filter.lower() not in sec_name.lower():
+                    continue
+                secrets.append(sec)
+
+        results = []
+        for sec in secrets:
+            data = sec.data or {}
+            decoded = {key: _decode(value) for key, value in data.items()}
+            matched_entries = {}
+            for key, value in decoded.items():
+                haystack = f"{key}\n{value}".lower()
+                if filters and any(token in haystack for token in filters):
+                    matched_entries[key] = _redact_secret_value(key, value)
+
+            results.append({
+                "name": sec.metadata.name,
+                "namespace": namespace,
+                "cluster": cluster or "",
+                "type": sec.type,
+                "matched_keys": list(matched_entries.keys()),
+                "matched_entries": matched_entries,
+            })
+
+        return json.dumps(
+            {
+                "namespace": namespace,
+                "cluster": cluster or "",
+                "total_secrets": len(results),
+                "secrets": results,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+    except Exception as e:
+        return json.dumps({"error": f"查询 Secret 失败: {str(e)}"})
+
+
+@tool
+async def get_deployment_config_refs(
+    namespace: str = "default",
+    name: str = "",
+    cluster: str = "",
+) -> str:
+    """查询 Deployment 引用的 ConfigMap / Secret / envFrom 关系。"""
+    if err := _check_namespace_access(namespace):
+        return json.dumps({"error": err})
+
+    _, apps_v1 = _get_k8s_client(cluster=cluster)
+    if not apps_v1:
+        return json.dumps({"error": "K8s 客户端未配置"})
+
+    try:
+        dep = apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
+        refs = {
+            "configmaps": [],
+            "secrets": [],
+            "env": [],
+        }
+        containers = dep.spec.template.spec.containers or []
+        for container in containers:
+            envs = container.env or []
+            env_froms = container.env_from or []
+            for env in envs:
+                item = {"container": container.name, "name": env.name}
+                if env.value is not None:
+                    item["value"] = env.value
+                    refs["env"].append(item)
+                elif env.value_from:
+                    if env.value_from.config_map_key_ref:
+                        refs["configmaps"].append(
+                            {
+                                "container": container.name,
+                                "name": env.value_from.config_map_key_ref.name,
+                                "key": env.value_from.config_map_key_ref.key,
+                                "env_name": env.name,
+                            }
+                        )
+                    if env.value_from.secret_key_ref:
+                        refs["secrets"].append(
+                            {
+                                "container": container.name,
+                                "name": env.value_from.secret_key_ref.name,
+                                "key": env.value_from.secret_key_ref.key,
+                                "env_name": env.name,
+                            }
+                        )
+            for env_from in env_froms:
+                if env_from.config_map_ref:
+                    refs["configmaps"].append(
+                        {
+                            "container": container.name,
+                            "name": env_from.config_map_ref.name,
+                            "key": "",
+                            "env_name": "*",
+                        }
+                    )
+                if env_from.secret_ref:
+                    refs["secrets"].append(
+                        {
+                            "container": container.name,
+                            "name": env_from.secret_ref.name,
+                            "key": "",
+                            "env_name": "*",
+                        }
+                    )
+
+        return json.dumps(
+            {
+                "namespace": namespace,
+                "cluster": cluster or "",
+                "deployment": name,
+                "refs": refs,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+    except Exception as e:
+        return json.dumps({"error": f"查询 Deployment 配置引用失败: {str(e)}"})
+
+
+@tool
+async def get_deployment_env(
+    namespace: str = "default",
+    name: str = "",
+    cluster: str = "",
+    key_filter: str = "",
+) -> str:
+    """查询 Deployment 中显式声明的 env 变量。"""
+    if err := _check_namespace_access(namespace):
+        return json.dumps({"error": err})
+
+    _, apps_v1 = _get_k8s_client(cluster=cluster)
+    if not apps_v1:
+        return json.dumps({"error": "K8s 客户端未配置"})
+
+    filters = [item.strip().lower() for item in key_filter.split(",") if item.strip()]
+
+    try:
+        dep = apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
+        entries = []
+        containers = dep.spec.template.spec.containers or []
+        for container in containers:
+            for env in container.env or []:
+                if env.value is None:
+                    continue
+                haystack = f"{env.name}\n{env.value}".lower()
+                if filters and not any(token in haystack for token in filters):
+                    continue
+                entries.append(
+                    {
+                        "container": container.name,
+                        "name": env.name,
+                        "value": env.value,
+                    }
+                )
+
+        return json.dumps(
+            {
+                "namespace": namespace,
+                "cluster": cluster or "",
+                "deployment": name,
+                "entries": entries,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+    except Exception as e:
+        return json.dumps({"error": f"查询 Deployment env 失败: {str(e)}"})
 
 
 @tool
@@ -571,6 +915,10 @@ async def get_k8s_events(
 k8s_tools = [
     get_pod_status,
     get_deployment_status,
+    get_configmap,
+    get_secret,
+    get_deployment_config_refs,
+    get_deployment_env,
     get_service_info,
     get_pod_logs,
     diagnose_pod,

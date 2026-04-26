@@ -15,6 +15,11 @@ from typing import Any
 from langchain_core.messages import BaseMessage
 
 from agent_kernel.memory.backend import MemoryBackend
+from agent_kernel.memory.lifecycle import (
+    LayerPolicySet,
+    apply_merge,
+    expired_keys,
+)
 from agent_kernel.memory.schema import DEFAULT_MEMORY_SCHEMA, MemorySchema
 from agent_kernel.schemas import AgentIdentityKey, IntentTypeKey, MemoryLayerKey, RiskLevel, RouteKey
 
@@ -150,14 +155,35 @@ class SessionStore(ABC):
     def clear(self, session_id: str) -> None:
         raise NotImplementedError
 
+    # Lifecycle maintenance — default no-op so existing custom stores don't
+    # break. New backends (Redis) override for real behaviour.
+    def compact(self, session_id: str) -> dict[MemoryLayerKey, int]:
+        return {}
+
+    def clear_all_except(self, active_session_ids: set[str]) -> int:
+        return 0
+
 
 class InMemorySessionStore(SessionStore):
-    """Thread-safe in-memory session and shared memory storage."""
+    """Thread-safe in-memory session and shared memory storage.
 
-    def __init__(self, *, memory_schema: MemorySchema | None = None):
+    Lifecycle governance (2026-04):
+      * Per-layer TTL defaults come from ``LayerPolicySet``.
+      * Writes go through ``apply_merge`` to honour dedup + merge strategies.
+      * ``compact(session_id)`` drops expired items for that session.
+      * ``clear_all_except(active_ids)`` prevents stale sessions from lingering.
+    """
+
+    def __init__(
+        self,
+        *,
+        memory_schema: MemorySchema | None = None,
+        layer_policies: LayerPolicySet | None = None,
+    ):
         self._sessions: dict[str, SessionSnapshot] = {}
         self._lock = Lock()
         self.memory_schema = memory_schema or DEFAULT_MEMORY_SCHEMA
+        self.layer_policies = layer_policies or LayerPolicySet()
 
     def get(self, session_id: str) -> SessionSnapshot:
         with self._lock:
@@ -211,18 +237,80 @@ class InMemorySessionStore(SessionStore):
         self.memory_schema.assert_can_write(writer=writer, layer=layer)
 
         snapshot = self.get(session_id)
-        item = MemoryItem(
-            key=key,
-            value=value,
-            layer=layer,
-            writer=writer,
-            source=source,
-            confidence=max(0.0, min(confidence, 1.0)),
-            ttl_seconds=ttl_seconds,
-        )
+        policy = self.layer_policies.get(layer, key)
+        # If caller didn't specify, fall back to the layer's default TTL.
+        effective_ttl = ttl_seconds if ttl_seconds is not None else policy.default_ttl_s
+        clamped_confidence = max(0.0, min(confidence, 1.0))
+
         with self._lock:
-            snapshot.shared_memory.get_layer(layer)[key] = item
-        return item
+            layer_dict = snapshot.shared_memory.get_layer(layer)
+            existing = layer_dict.get(key)
+
+            now = datetime.now()
+            new_value, bump_ts = apply_merge(
+                policy=policy,
+                existing=existing.value if existing else None,
+                existing_timestamp=existing.timestamp if existing else None,
+                existing_confidence=existing.confidence if existing else None,
+                incoming_value=value,
+                incoming_confidence=clamped_confidence,
+                now=now,
+            )
+
+            if existing and not bump_ts:
+                # Dedup / keep-existing path — don't create a new item; return
+                # the old one unchanged. TTL clock is preserved.
+                return existing
+
+            item = MemoryItem(
+                key=key,
+                value=new_value,
+                layer=layer,
+                writer=writer,
+                source=source,
+                confidence=clamped_confidence,
+                timestamp=now,
+                ttl_seconds=effective_ttl,
+            )
+            layer_dict[key] = item
+            return item
+
+    # ------------------------------------------------------------------
+    # Lifecycle maintenance (added per arch review 2026-04)
+    # ------------------------------------------------------------------
+    def compact(self, session_id: str) -> dict[MemoryLayerKey, int]:
+        """Drop expired items for the session. Returns count per layer."""
+        snapshot = self.get(session_id)
+        now = datetime.now()
+        evicted: dict[MemoryLayerKey, int] = {}
+        with self._lock:
+            for layer in list(self.memory_schema.layers()):
+                layer_dict = snapshot.shared_memory.get_layer(layer)
+                dead = expired_keys(
+                    layer_dict,
+                    get_timestamp=lambda it: it.timestamp,
+                    get_ttl_s=lambda it: it.ttl_seconds,
+                    now=now,
+                )
+                for k in dead:
+                    layer_dict.pop(k, None)
+                if dead:
+                    evicted[layer] = len(dead)
+        return evicted
+
+    def clear_all_except(self, active_session_ids: set[str]) -> int:
+        """Evict every session not in ``active_session_ids``. Returns count.
+
+        Prevents cross-session pollution and unbounded growth when callers
+        never explicitly ``clear()``.
+        """
+        removed = 0
+        with self._lock:
+            for sid in list(self._sessions.keys()):
+                if sid not in active_session_ids:
+                    self._sessions.pop(sid, None)
+                    removed += 1
+        return removed
 
     def read_memory_item(self, session_id: str, layer: MemoryLayerKey, key: str) -> MemoryItem | None:
         snapshot = self.get(session_id)
