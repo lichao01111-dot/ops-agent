@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OpsAgent Playground</title>
+  <title>JARVIS Playground</title>
   <style>
     :root {
       --bg: #f5f1e8;
@@ -413,7 +413,7 @@
   <div class="wrap">
     <div class="hero">
       <div>
-        <h1>OpsAgent Playground</h1>
+        <h1>JARVIS Playground</h1>
         <p>直接在浏览器里测试 <code>/api/chat</code> 和 <code>/api/chat/stream</code>。适合先验证知识问答，再逐步测试运维查询和审批类流程。</p>
       </div>
       <div class="hero-meta">
@@ -432,10 +432,10 @@
         <div class="card-body">
           <div class="field">
             <label for="message">问题</label>
-            <textarea id="message">OpsAgent 现在有哪 4 类 route？</textarea>
+            <textarea id="message">JARVIS 现在有哪 6 类 route？</textarea>
             <div class="quick-prompts">
-              <button class="chip" data-prompt="OpsAgent 现在有哪 4 类 route？">知识问答</button>
-              <button class="chip" data-prompt="Kernel 和 OpsAgent 分别负责什么？">架构说明</button>
+              <button class="chip" data-prompt="JARVIS 现在有哪 6 类 route？">知识问答</button>
+              <button class="chip" data-prompt="Kernel 和 JARVIS 分别负责什么？">架构说明</button>
               <button class="chip" data-prompt="查一下 staging 的 order-service pod 状态">运维查询</button>
               <button class="chip" data-prompt="帮我重启 staging 的 order-service">审批场景</button>
             </div>
@@ -777,7 +777,7 @@
 
     function clearAll() {
       if (isRunning) return;
-      $("message").value = "OpsAgent 现在有哪 4 类 route？";
+      $("message").value = "JARVIS 现在有哪 6 类 route？";
       resetConversation();
       setStatus("等待请求", "待机");
     }

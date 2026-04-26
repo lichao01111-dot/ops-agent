@@ -1,4 +1,4 @@
-"""Generate OpsAgent architecture DETAILED briefing PPT.
+"""Generate JARVIS architecture DETAILED briefing PPT.
 
 Run:
     ./.venv/bin/python scripts/build_ppt.py
@@ -184,7 +184,7 @@ def add_header(slide, title, subtitle=None, page_num=None, chapter=None):
 def add_footer(slide):
     add_textbox(
         slide, Inches(0.5), Inches(7.15), Inches(12.3), Inches(0.25),
-        "OpsAgent · Agent Kernel + Vertical Agent · 详细架构讲解",
+        "JARVIS · Agent Kernel + Vertical Agent · 详细架构讲解",
         size=9, color=MEDIUM_GRAY, align=PP_ALIGN.RIGHT, font=ENGLISH_FONT,
     )
 
@@ -243,7 +243,7 @@ def slide_01_cover(prs):
     accent.line.fill.background()
 
     add_textbox(s, Inches(0.8), Inches(2.5), Inches(12), Inches(1.3),
-                "OpsAgent 架构详解", size=56, bold=True, color=WHITE)
+                "JARVIS 架构详解", size=56, bold=True, color=WHITE)
     add_textbox(s, Inches(0.8), Inches(3.7), Inches(12), Inches(0.8),
                 "Agent Kernel + Vertical Agent",
                 size=30, color=RGBColor(0xCC, 0xDD, 0xEE))
@@ -264,7 +264,7 @@ def slide_02_toc(prs):
         ("Part 1", "背景与问题", "为什么要重构", "p.3–5", DEEP_BLUE),
         ("Part 2", "整体分层", "Kernel / Vertical / Supervisor", "p.6–8", GREEN),
         ("Part 3", "Agent Kernel 深度讲解", "每个组件的职责与接口", "p.9–17", PURPLE),
-        ("Part 4", "OpsAgent 垂直实现", "作为第一个 Vertical 样例", "p.18–22", ACCENT),
+        ("Part 4", "JARVIS 垂直实现", "作为第一个 Vertical 样例", "p.18–22", ACCENT),
         ("Part 5", "关键执行流程", "审批 / 诊断 / 复合请求", "p.23–26", DEEP_BLUE),
         ("Part 6", "插件化与扩展", "10 个插件点 + 新 Vertical 清单", "p.27–28", GREEN),
         ("Part 7", "演进方向与测试", "降级 / 测试 / Supervisor / 路线图", "p.29–32", PURPLE),
@@ -466,7 +466,7 @@ def slide_06_layers_overview(prs):
 
     # 4 Verticals
     verticals = [
-        ("OpsAgent", "运维\n（已落地）", GREEN),
+        ("JARVIS", "运维\n（已落地）", GREEN),
         ("CsmAgent", "客服\n（未来）", MEDIUM_GRAY),
         ("DataAgent", "数据\n（未来）", MEDIUM_GRAY),
         ("DocAgent", "文档\n（未来）", MEDIUM_GRAY),
@@ -607,7 +607,7 @@ def slide_08_directory(prs):
                 "📁  agent_ops/", size=17, bold=True, color=ACCENT,
                 font=MONO_FONT)
     ops_tree = [
-        "agent.py             # OpsAgent 装配",
+        "agent.py             # JARVIS 装配（代码类名仍为 OpsAgent）",
         "router.py            # IntentRouter (关键词)",
         "planner.py           # OpsPlanner (中文拆分)",
         "risk_policy.py       # OpsApprovalPolicy",
@@ -1167,14 +1167,14 @@ def slide_18_invariants(prs):
         y += 1.08
 
 
-# ====================== Part 4  OpsAgent ======================
+# ====================== Part 4  JARVIS ======================
 
 
 def slide_19_ops_composition(prs):
     s = blank_slide(prs)
-    add_header(s, "OpsAgent 组成：装配就是套壳",
+    add_header(s, "JARVIS 组成：装配就是套壳",
                "create_ops_agent() 把 Kernel 组件拼起来",
-               page_num=19, chapter="PART 4  OpsAgent 垂直实现")
+               page_num=19, chapter="PART 4  JARVIS 垂直实现")
 
     add_code_block(s, Inches(0.5), Inches(1.55), Inches(12.3), Inches(4.6), [
         "def create_ops_agent() -> OpsAgent:",
@@ -1209,9 +1209,9 @@ def slide_19_ops_composition(prs):
 
 def slide_20_ops_executors(prs):
     s = blank_slide(prs)
-    add_header(s, "OpsAgent 的 4 个 Executor",
+    add_header(s, "JARVIS 的 4 个 Executor",
                "每个路由都有明确的职责、工具范围、记忆写入权限",
-               page_num=20, chapter="PART 4  OpsAgent 垂直实现")
+               page_num=20, chapter="PART 4  JARVIS 垂直实现")
 
     executors = [
         ("KnowledgeExecutor", GREEN,
@@ -1272,7 +1272,7 @@ def slide_21_ops_planner(prs):
     s = blank_slide(prs)
     add_header(s, "OpsPlanner —— 复合请求的中文拆分",
                "_split_compound 覆写示例：把一句话拆成多步",
-               page_num=21, chapter="PART 4  OpsAgent 垂直实现")
+               page_num=21, chapter="PART 4  JARVIS 垂直实现")
 
     # Example flow
     add_textbox(s, Inches(0.5), Inches(1.55), Inches(12), Inches(0.4),
@@ -1317,7 +1317,7 @@ def slide_22_ops_approval_memory(prs):
     s = blank_slide(prs)
     add_header(s, "OpsApprovalPolicy + OPS_MEMORY_SCHEMA",
                "Ops 填好的两个安全相关插件槽",
-               page_num=22, chapter="PART 4  OpsAgent 垂直实现")
+               page_num=22, chapter="PART 4  JARVIS 垂直实现")
 
     # OpsApprovalPolicy
     add_rect(s, Inches(0.5), Inches(1.55), Inches(6.15), Inches(5.4),
@@ -1889,7 +1889,7 @@ def slide_31_supervisor(prs):
     sub = [
         ("DataAgent", "查销售曲线\nSQL + BI", GREEN),
         ("CsmAgent", "投诉分类\n退款 / 延迟占比", DEEP_BLUE),
-        ("OpsAgent", "线上异常排查\n影响转化的故障", ACCENT),
+        ("JARVIS", "线上异常排查\n影响转化的故障", ACCENT),
         ("DocAgent", "生成一页\n摘要报告", PURPLE),
     ]
     x = 1.1
@@ -1930,7 +1930,7 @@ def slide_32_roadmap(prs):
     summary = [
         "• Kernel 11 个组件 + 5 条不变量",
         "• 10 个插件点 + 新 Vertical 五步清单",
-        "• OpsAgent 4 个 Executor + 中文拆分",
+        "• JARVIS 4 个 Executor + 中文拆分",
         "• 审批凭据 / 多假设诊断 详细流程",
         "• 三级降级 + 84 个自动化测试覆盖",
         "• Supervisor 演进方向已预留字段",
@@ -1945,7 +1945,7 @@ def slide_32_roadmap(prs):
     add_textbox(s, Inches(0.7), Inches(5.4), Inches(5.8), Inches(0.4),
                 "核心价值", size=14, bold=True, color=ACCENT)
     add_textbox(s, Inches(0.7), Inches(5.8), Inches(5.8), Inches(0.9),
-                "OpsAgent 只是起点 ——\n我们在造一个可以孵化任意\n业务 Agent 的基建平台",
+                "JARVIS 只是起点 ——\n我们在造一个可以孵化任意\n业务 Agent 的基建平台",
                 size=13, bold=True, color=WHITE)
 
     # 右：路线图

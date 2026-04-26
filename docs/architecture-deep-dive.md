@@ -1,16 +1,17 @@
-# OpsAgent 推荐架构深度解析
+# JARVIS 推荐架构深度解析
 
 > **定位说明**
 >
-> 本文档主要解释 OpsAgent 在 route-first 阶段的设计思路、控制流和演进背景。
+> 本文档主要解释 JARVIS 在 route-first 阶段的设计思路、控制流和演进背景。
 > 当前推荐目标架构请以 [`architecture-v2.md`](./architecture-v2.md) 为准。
+> `JARVIS` 是产品名；`OpsAgent` 在本文中若出现，通常指当前代码里的类名或实现路径。
 >
 > 可以把两份文档理解成：
 >
 > - 本文回答“旧实现怎么工作、为什么继续演进”
 > - `architecture-v2.md` 回答“现在应该如何分层、契约如何落地”
 
-本文档描述 OpsAgent 的推荐版 Agent 架构。目标不是”让所有请求都走 ReAct”，而是把不同任务映射到不同的执行范式：
+本文档描述 JARVIS 的推荐版 Agent 架构。目标不是”让所有请求都走 ReAct”，而是把不同任务映射到不同的执行范式：
 
 - `knowledge`：RAG-first，非 ReAct
 - `read_only_ops`：确定性查询执行器，非 ReAct
@@ -194,7 +195,7 @@ agent_ops/
 
 ```mermaid
 flowchart TD
-    A["gateway.app.chat() / chat_stream()"] --> B["OpsAgent.chat()<br/>OpsAgentStreaming.chat_stream()"]
+    A["gateway.app.chat() / chat_stream()"] --> B["JARVIS.chat()<br/>JARVISStreaming.chat_stream()"] 
     B --> C["_build_initial_state()"]
     C --> D["graph.ainvoke() / manual streaming dispatch"]
 

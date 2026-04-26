@@ -1,4 +1,4 @@
-"""Generate OpsAgent architecture briefing — fully self-contained HTML.
+"""Generate JARVIS architecture briefing — fully self-contained HTML.
 
 No external CDN dependencies. Works in htmlpreview.github.io, local file://, anywhere.
 
@@ -118,7 +118,7 @@ def s01():
 <div class="slide" style="background:{NAVY}">
   <div style="display:flex;height:100%;align-items:center;padding:0 5%">
     <div style="border-left:6px solid {ACCENT};padding-left:2rem">
-      <h1 style="color:{WHITE};font-size:2.6em;margin:0">OpsAgent 架构详解</h1>
+      <h1 style="color:{WHITE};font-size:2.6em;margin:0">JARVIS 架构详解</h1>
       <p style="color:#CCDDEE;font-size:1.35em;margin:.6rem 0">
         Agent Kernel + Vertical Agent</p>
       <p style="color:#9AAACC;font-size:.95em;margin:0">
@@ -134,7 +134,7 @@ def s02():
         ("Part 1", "背景与问题",          "为什么要重构",                    "p.3–5",  BLUE),
         ("Part 2", "整体分层",            "Kernel / Vertical / Supervisor",  "p.6–8",  GREEN),
         ("Part 3", "Agent Kernel 深度讲解","每个组件的职责与接口",            "p.9–18", PURPLE),
-        ("Part 4", "OpsAgent 垂直实现",   "作为第一个 Vertical 样例",        "p.19–22",ACCENT),
+        ("Part 4", "JARVIS 垂直实现",   "作为第一个 Vertical 样例",        "p.19–22",ACCENT),
         ("Part 5", "关键执行流程",         "审批 / 诊断 / 复合请求",          "p.23–26",BLUE),
         ("Part 6", "插件化与扩展",         "10 个插件点 + 新 Vertical 清单",  "p.27–28",GREEN),
         ("Part 7", "演进方向与测试",       "降级 / 测试 / Supervisor / 路线图","p.29–32",PURPLE),
@@ -220,7 +220,7 @@ def s05():
 
 
 def s06():
-    verts = [("OpsAgent","运维（已落地）",GREEN),("CsmAgent","客服（未来）",MGRAY),
+    verts = [("JARVIS","运维（已落地）",GREEN),("CsmAgent","客服（未来）",MGRAY),
              ("DataAgent","数据（未来）",MGRAY),("DocAgent","文档（未来）",MGRAY)]
     vcards = "".join(
         f'<div style="background:{c};color:{WHITE};border-radius:6px;'
@@ -304,7 +304,7 @@ def s08():
                    "patterns/            # 可选基类库",
                    "  multi_hypothesis.py",
                    "  approval_gate.py"]
-    ops_tree = ["agent.py             # OpsAgent 装配",
+    ops_tree = ["agent.py             # JARVIS 装配（代码类名仍为 OpsAgent）",
                 "router.py            # IntentRouter (关键词)",
                 "planner.py           # OpsPlanner (中文拆分)",
                 "risk_policy.py       # OpsApprovalPolicy",
@@ -711,8 +711,8 @@ def s19():
         "#   approval_policy = OpsApprovalPolicy()        # 生产 namespace 必审批",
         "#   executors = [Knowledge, ReadOnly, Diagnosis, Mutation]",
     ]) + bottom_bar("想做新 Vertical？复制这个文件，替换 4 个 Ops 专有组件即可")
-    return section("PART 4  OpsAgent 垂直实现",
-                   "OpsAgent 组成：装配就是套壳",
+    return section("PART 4  JARVIS 垂直实现",
+                   "JARVIS 组成：装配就是套壳",
                    "create_ops_agent() 把 Kernel 组件拼起来", body)
 
 
@@ -737,8 +737,8 @@ def s20():
         f'</div></div>'
         for name, c, route, desc, tools, mem in execs
     )
-    return section("PART 4  OpsAgent 垂直实现",
-                   "OpsAgent 的 4 个 Executor",
+    return section("PART 4  JARVIS 垂直实现",
+                   "JARVIS 的 4 个 Executor",
                    "每个路由都有明确的职责、工具范围、记忆写入权限",
                    f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem">{cards}</div>')
 
@@ -775,7 +775,7 @@ def s21():
     <span style="font-size:.85em">route = mutation · HIGH · 必审批</span>
   </div>
 </div>"""
-    return section("PART 4  OpsAgent 垂直实现",
+    return section("PART 4  JARVIS 垂直实现",
                    "OpsPlanner — 复合请求的中文拆分",
                    "_split_compound 覆写示例：把一句话拆成多步", body)
 
@@ -820,7 +820,7 @@ def s22():
     right = card(hdr("OPS_MEMORY_SCHEMA（memory_schema.py）", BLUE)
                  + f'<p style="font-size:.82em;margin:.3rem 0"><strong>6 层记忆 + 对应 writer：</strong></p>'
                  + layer_rows, LBLUE, BLUE)
-    return section("PART 4  OpsAgent 垂直实现",
+    return section("PART 4  JARVIS 垂直实现",
                    "OpsApprovalPolicy + OPS_MEMORY_SCHEMA",
                    "Ops 填好的两个安全相关插件槽", two_col(left, right))
 
@@ -1092,7 +1092,7 @@ def s30():
 def s31():
     agents = [("DataAgent","查销售曲线\nSQL+BI",GREEN),
               ("CsmAgent","投诉分类\n退款/延迟占比",BLUE),
-              ("OpsAgent","线上异常排查\n影响转化故障",ACCENT),
+              ("JARVIS","线上异常排查\n影响转化故障",ACCENT),
               ("DocAgent","生成一页\n摘要报告",PURPLE)]
     acards = "".join(
         f'<div style="background:{c};color:{WHITE};border-radius:8px;'
@@ -1151,7 +1151,7 @@ def s32():
     )
     summary = ["Kernel 11 个组件 + 5 条不变量",
                "10 个插件点 + 新 Vertical 五步清单",
-               "OpsAgent 4 个 Executor + 中文拆分",
+               "JARVIS 4 个 Executor + 中文拆分",
                "审批凭据 / 多假设诊断详细流程",
                "三级降级 + 84 个自动化测试覆盖",
                "Supervisor 演进方向已预留字段"]
@@ -1160,7 +1160,7 @@ def s32():
                  + f'<div style="background:{NAVY};border-radius:6px;padding:.5rem;margin-top:.4rem">'
                    f'<strong style="color:{ACCENT}">核心价值</strong>'
                    f'<p style="color:{WHITE};font-size:.82em;margin:.2rem 0">'
-                   f'OpsAgent 只是起点 — 我们在造一个可以孵化任意业务 Agent 的基建平台</p>'
+                   f'JARVIS 只是起点 — 我们在造一个可以孵化任意业务 Agent 的基建平台</p>'
                    f'</div>', LBLUE, BLUE)
     right = card(hdr("🛣️ 路线图", ACCENT) + rmap, "#fff2e6", ACCENT)
     return section("PART 7  演进方向与测试",
@@ -1230,7 +1230,7 @@ SHELL = """\
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>OpsAgent 架构详解</title>
+<title>JARVIS 架构详解</title>
 <style>{css}</style>
 </head>
 <body>

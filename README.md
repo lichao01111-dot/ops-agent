@@ -1,6 +1,8 @@
-# OpsAgent
+# JARVIS
 
 基于 LangChain + LangGraph 构建的 DevOps AI Agent。采用「Agent Kernel + Vertical Agent」分层架构：通用编排骨架在 `agent_kernel/`，Ops 垂直逻辑在 `agent_ops/`，覆盖知识问答、只读运维查询、Stage-0 事件聚合、故障诊断、受审批约束的变更执行和变更后自动校验。
+
+说明：产品名现统一为 `JARVIS`；当前代码实现中的核心类名、工厂方法和包路径仍保持 `OpsAgent` / `create_ops_agent()` / `agent_ops/`，以与现有代码一致。
 
 ## 当前状态
 
@@ -26,7 +28,7 @@
 ```mermaid
 flowchart TD
     U["User / API / IM / CLI"] --> G["Gateway Layer"]
-    G --> O["OpsAgent"]
+    G --> O["JARVIS"]
     O --> K["Agent Kernel\n(Planner + StateGraph + ToolRegistry + Memory + Approval)"]
     O --> R{"Router\n意图识别"}
     R -->|investigation| IV["InvestigatorExecutor\n5工具并行取证"]
@@ -366,7 +368,7 @@ ops-agent/
 │       ├── mcp_gateway.py           ← MCPClient：MCP 服务器注册 + 工具加载
 │       └── registry.py              ← ToolRegistry：本地 + MCP 工具统一注册
 ├── agent_ops/                       ← Ops 垂直
-│   ├── agent.py                     ← OpsAgent 装配入口
+│   ├── agent.py                     ← JARVIS 装配入口（代码类名仍为 OpsAgent）
 │   ├── planner.py                   ← OpsPlanner：_maybe_replan（自动追加 verification）
 │   ├── router.py                    ← IntentRouter：关键词 + 上下文信号 + LLM fallback
 │   ├── schemas.py                   ← AgentRoute / IntentType / Hypothesis / ServiceNode

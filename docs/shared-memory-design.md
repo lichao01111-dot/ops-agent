@@ -1,12 +1,13 @@
-# OpsAgent Shared Memory 设计
+# JARVIS Shared Memory 设计
 
 > **定位说明**
 >
 > 本文档描述的是 Ops 垂直下的 memory 语义示例。
 > Kernel 层只定义 `MemorySchema` / `MemoryBackend` / `SessionStore` 的接口和默认实现；
 > 当前推荐契约以 [`architecture-v2.md`](./architecture-v2.md) 为准。
+> `JARVIS` 是产品名；代码实现中涉及的类名与路径仍保持 `OpsAgent` / `agent_ops/`。
 
-本文档定义 OpsAgent 的 shared memory schema 和 agent 权限矩阵。目标是让多个 agent / executor 可以共享高价值上下文，同时避免“推断污染事实”。
+本文档定义 JARVIS 的 shared memory schema 和 agent 权限矩阵。目标是让多个 agent / executor 可以共享高价值上下文，同时避免“推断污染事实”。
 
 ## 设计原则
 

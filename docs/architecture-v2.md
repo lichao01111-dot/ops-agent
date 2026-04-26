@@ -1,14 +1,16 @@
-# OpsAgent v2 架构设计：Agent Kernel + 垂直 Agent
+# JARVIS v2 架构设计：Agent Kernel + 垂直 Agent
 
 > **本文档的定位已经改变**。
 >
-> 之前的 v2 版本把 OpsAgent 当作一个"带 Planner 的运维 Agent"来设计。现在我们意识到：**真正有价值的是把编排骨架抽成通用框架，再在其上构造不同垂直 Agent**。
+> 之前的 v2 版本把 JARVIS 当作一个"带 Planner 的运维 Agent"来设计。现在我们意识到：**真正有价值的是把编排骨架抽成通用框架，再在其上构造不同垂直 Agent**。
 >
-> 所以本文档描述的不再是"一个更强的 OpsAgent"，而是：
+> 所以本文档描述的不再是"一个更强的 JARVIS"，而是：
 >
 > 1. **Agent Kernel**：领域无关的通用编排框架（Planner / ToolRegistry / MCP / StateGraph / Memory / Audit / Approval …）
-> 2. **Vertical Agents**：Kernel 之上的若干垂直 Agent（当前第一个是 OpsAgent；未来可能加 CsmAgent / DataAgent / DocAgent …）
+> 2. **Vertical Agents**：Kernel 之上的若干垂直 Agent（当前第一个是 JARVIS；未来可能加 CsmAgent / DataAgent / DocAgent …）
 > 3. **Supervisor（未来）**：多 Agent 协同的上层调度
+
+> 说明：本文中的 `JARVIS` 指产品/系统名称；涉及代码实现时，当前类名和工厂方法仍然是 `OpsAgent` / `create_ops_agent()`。
 
 ---
 
@@ -18,7 +20,7 @@
 - §2 设计原则
 - §3 整体分层（Kernel / Vertical / Supervisor）
 - §4 Agent Kernel：职责与 API
-- §5 Vertical Agent：OpsAgent（第一个垂直示例）
+- §5 Vertical Agent：JARVIS（第一个垂直示例）
 - §6 插件点（Plugin Points）
 - §7 Supervisor 多 Agent 模式（演进方向）
 - §8 数据契约与安全边界
@@ -100,7 +102,7 @@ Approval + Audit + 脱敏                 _build_pipeline_plan
       ┌────────────────┼──────────────┬───────────────┐
       ↓                ↓              ↓               ↓
 ┌──────────┐    ┌──────────┐    ┌──────────┐   ┌──────────┐
-│ OpsAgent │    │ CsmAgent │    │DataAgent │   │ DocAgent │       (各垂直 Agent)
+│ JARVIS   │    │ CsmAgent │    │DataAgent │   │ DocAgent │       (各垂直 Agent)
 │          │    │  (未来)   │    │  (未来)   │   │  (未来)   │
 └────┬─────┘    └────┬─────┘    └────┬─────┘   └────┬─────┘
      └────────────────┴───────────────┴─────────────┘
@@ -221,17 +223,17 @@ class RouteCatalog:
 
 ---
 
-## 5. Vertical Agent：OpsAgent（第一个示例）
+## 5. Vertical Agent：JARVIS（第一个示例）
 
-### 5.1 OpsAgent 的组成
+### 5.1 JARVIS 的组成
 
-当前 OpsAgent 包含 **6 个执行器**，形成完整的调查→诊断→变更→校验闭环：
+当前 JARVIS 包含 **6 个执行器**，形成完整的调查→诊断→变更→校验闭环：
 
 ```
 agent_ops/
 ├─ agent.py                 ← OpsAgent(BaseAgent) 装配入口
 ├─ planner.py               ← OpsPlanner：_maybe_replan（mutation 后自动追加 verification）
-├─ router.py                ← IntentRouter(RouterBase)：关键词 + 上下文信号 + LLM fallback
+├─ router.py                ← IntentRouter(RouterBase)：当前以关键词 + 上下文信号为主；LLM/classifier fallback 为升级方向
 ├─ schemas.py               ← AgentRoute / IntentType / Hypothesis / ServiceNode …
 ├─ executors/
 │   ├─ knowledge.py         ← KnowledgeExecutor(ExecutorBase)       route="knowledge"
@@ -362,7 +364,7 @@ def evaluate(self, *, tool_name, route, step, context):
 
 ### 5.3 有限多 Agent 模式（InvestigatorExecutor）
 
-OpsAgent 实现了"有限多 Agent"而不是全功能 Supervisor，原因见 §7 前的说明：
+JARVIS 实现了"有限多 Agent"而不是全功能 Supervisor，原因见 §7 前的说明：
 
 ```
 调查路由触发条件（满足任一）：
@@ -387,7 +389,7 @@ InvestigatorExecutor（asyncio.gather 并行）：
 - 模糊/告警查询：investigator 先行，然后 diagnosis + mutation
 - 已知变更：跳过 investigator
 
-### 5.4 DiagnosisExecutor 仍然保留在 OpsAgent
+### 5.4 DiagnosisExecutor 仍然保留在 JARVIS
 
 **重要**：`DiagnosisExecutor` 的多假设并行模式虽然精妙，但它的**启发式打分**（"oom" / "crashloop" / "imagepullbackoff"）是 Ops 特有的，因此它属于 `agent_ops/`，不进 Kernel。
 
@@ -475,13 +477,29 @@ agent = OpsAgent(
 | 1 | **路由器** | `RouterBase.route(request) -> RouteDecision` | 意图识别。Vertical 可用关键词、规则、LLM |
 | 2 | **执行器** | `ExecutorBase.execute(state) -> dict` | 每个 route 一个执行器 |
 | 3 | **工具** | `@tool` + `ToolRegistry.register_local/_mcp` | `ToolSpec.tags / route_affinity / side_effect` |
-| 4 | **MCP 服务器** | `MCPClient.register_server(name, url)` | 远程工具零代码接入 |
+| 4 | **MCP 服务器** | `MCPClient.register_server(name, url)` | 远程工具接入契约；生产落地仍需鉴权、超时、版本与审计治理 |
 | 5 | **Planner 定制** | `Planner` 子类化 `_split_compound` / `_maybe_replan` | Vertical 可改拆分规则和重规划逻辑 |
 | 6 | **记忆 Schema** | `MemorySchema(layers={...})` | 定义层、writer 权限 |
 | 7 | **审批策略** | `ApprovalPolicy.evaluate(step, context) -> ApprovalDecision` | Ops 按 namespace，财务按金额，HR 按字段 |
 | 8 | **审计扩展** | `AuditLogger.sanitize_params` / `.sinks` | 追加脱敏规则、写入 SIEM |
 | 9 | **RBAC 身份** | `AgentIdentityKey` 可注册字符串契约 | Vertical 自己的 writer 身份 |
 | 10 | **Executor 模式库**（可选） | `MultiHypothesisExecutor` / `ChainedReadExecutor` / `ApprovalGateExecutor` | 可选基类，给常见模式提供骨架 |
+
+### 6.1 本轮架构评审后的补强项
+
+以下几项不应再停留在“未来可考虑”，而应作为正式架构工作项：
+
+1. `MCP` 从“接入契约”升级为“生产治理能力”。
+需要补齐鉴权、超时、重试、熔断、幂等、schema 版本治理、trace/audit 关联。
+
+2. `MemorySchema` 从“分层 + RBAC”升级为“生命周期治理”。
+需要正式定义 TTL、冲突合并、跨轮次衰减、污染控制、关键事件保留策略。
+
+3. `Supervisor` 的口径统一为“已预留扩展位”而不是“已落地多 Agent 协同”。
+`execution_target` 只是契约前置，不等于已经实现 AgentProxy、联合审批、统一观测和结果归并。
+
+4. 路由与工具边界继续收紧。
+路由建议升级为“规则 + 分类器/LLM + 置信度 + 回退”；`_invoke_tool` 继续作为唯一可信执行入口，尽量避免业务代码绕开它直接触达工具。
 
 ---
 
@@ -497,7 +515,7 @@ agent = OpsAgent(
 "Q3 订单为什么下滑？"
    ├─ 数据 Agent：SQL 查询 + BI 看板
    ├─ 客服 Agent：投诉 / 退款增多的品类
-   ├─ Ops Agent：有没有线上异常影响转化
+   ├─ JARVIS：有没有线上异常影响转化
    └─ Doc Agent：生成一页总结
 ```
 
@@ -538,7 +556,7 @@ PlanStep.execution_target = "agent:csm"
   └────────┬─────────────┬──────────┬───────┘
            ↓             ↓          ↓
     ┌──────────┐   ┌──────────┐  ┌──────────┐
-    │ OpsAgent │   │ CsmAgent │  │DataAgent │
+    │ JARVIS   │   │ CsmAgent │  │DataAgent │
     │ (独立进程 │   │          │  │          │
     │  /独立实例)│  │          │  │          │
     └──────────┘   └──────────┘  └──────────┘
@@ -644,7 +662,7 @@ OrderContext (Csm 专属)
 
 ### 9.1 已完成（当前代码）
 
-架构迁移已完成，以下功能均已落地并通过 84 个测试：
+架构迁移已完成。以下功能在当前代码库中已落地；关于“84 个测试”的对外表述，应以 CI 结果或可复现实验环境为准，不应把测试矩阵设计直接等同于充分验证：
 
 | 功能 | 状态 | 位置 |
 |------|------|------|
@@ -763,7 +781,7 @@ OrderContext (Csm 专属)
 
 | 维度 | 旧版 v2（设计文档初稿） | 当前实现（已落地） |
 |------|------------------------|-------------------|
-| 定位 | 描述一个”更强的 OpsAgent” | Kernel + Vertical 分层框架，已实现 |
+| 定位 | 描述一个”更强的 JARVIS” | Kernel + Vertical 分层框架，已实现 |
 | Executor 数量 | 4（knowledge / read / diagnosis / mutation） | 6（+investigation / +verification） |
 | Mutation 执行 | 计划 + 审批骨架 | 完整闭环：计划→审批→执行→自动追加校验→自动回滚 |
 | K8s 写操作工具 | 计划中，未实现 | 已实现：restart / scale / rollback / get_k8s_events（共 16 工具） |
@@ -771,5 +789,5 @@ OrderContext (Csm 专属)
 | Approval 状态机 | 骨架 | 完整：receipt 绑定 step + 有效期 + 回滚预授权 |
 | 多 Agent 模式 | Supervisor（演进方向） | 有限多 Agent（Investigator + Executor/Verifier） |
 | 工具数量 | 12 | 16（+restart_deployment / +scale_deployment / +rollback_deployment / +get_k8s_events） |
-| 路由信号 | 纯关键词 | 关键词 + 上下文信号（ctx_has_incident / ctx_has_mutation_target） + LLM fallback |
+| 路由信号 | 纯关键词 | 当前为关键词 + 上下文信号；规则 + 分类器/LLM + 置信度回退是下一阶段补强项 |
 | `MemoryLayer` | 固定 Enum | Vertical 的 MemorySchema 定义，RBAC 校验 |
