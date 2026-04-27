@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>JARVIS · Enterprise AI Agent Platform</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body, #root { width: 100%; height: 100%; overflow: hidden; }
+  body { font-family: 'Inter', 'Noto Sans SC', sans-serif; }
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(99,140,210,0.2); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(99,140,210,0.4); }
+  input, textarea, button { font-family: inherit; }
+  @keyframes fadeInUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+  @keyframes pulse { 0%,100% { opacity:0.3; transform:scale(0.8); } 50% { opacity:1; transform:scale(1); } }
+  @keyframes bounce { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-4px); } }
+  @keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="lib/api.js"></script>
+<script src="lib/sseClient.js"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="Login.jsx"></script>
+<script type="text/babel" src="Sidebar.jsx"></script>
+<script type="text/babel" src="ChatMessages.jsx"></script>
+<script type="text/babel" src="ChatInput.jsx"></script>
+<script type="text/babel" src="ApprovalModal.jsx"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<template id="__bundler_thumbnail" data-bg-color="#070d1a">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#070d1a"/>
+    <rect x="0" y="0" width="220" height="800" fill="#0d1628"/>
+    <rect x="220" y="0" width="980" height="800" fill="#070d1a"/>
+    <circle cx="600" cy="400" r="60" fill="none" stroke="#3b82f6" stroke-width="2" opacity="0.6"/>
+    <path d="M580 400 L600 360 L620 400 L600 440 Z" fill="#3b82f6" opacity="0.8"/>
+    <text x="600" y="500" text-anchor="middle" fill="#3b82f6" font-size="24" font-family="monospace" opacity="0.7">JARVIS</text>
+  </svg>
+</template>
+
+<script type="text/babel">
+const THEMES = {
+  deepBlue: {
+    name: '深蓝金融', nameEn: 'Deep Blue Finance',
+    bg: '#070d1a', sidebarBg: '#080f1e', surface: '#0d1628',
+    accent: '#3b82f6', border: 'rgba(99,140,210,0.18)',
+    text: '#e2e8f0', subtext: '#64748b', hover: 'rgba(99,140,210,0.08)'
+  },
+  darkTech: {
+    name: '暗夜科技', nameEn: 'Dark Tech',
+    bg: '#09090b', sidebarBg: '#0d0d10', surface: '#18181b',
+    accent: '#a78bfa', border: 'rgba(167,139,250,0.15)',
+    text: '#fafafa', subtext: '#71717a', hover: 'rgba(167,139,250,0.08)'
+  },
+  modernLight: {
+    name: '现代简约', nameEn: 'Modern Light',
+    bg: '#f1f5f9', sidebarBg: '#ffffff', surface: '#ffffff',
+    accent: '#1d4ed8', border: 'rgba(30,64,175,0.12)',
+    text: '#0f172a', subtext: '#64748b', hover: 'rgba(30,64,175,0.06)'
+  },
+  emerald: {
+    name: '翡翠绿', nameEn: 'Emerald',
+    bg: '#030c0a', sidebarBg: '#061410', surface: '#0a1f1a',
+    accent: '#10b981', border: 'rgba(16,185,129,0.15)',
+    text: '#ecfdf5', subtext: '#6b7280', hover: 'rgba(16,185,129,0.08)'
+  }
+};
+
+const AGENTS = [
+  { id: 'it-ops',  name: 'IT运维助手', nameEn: 'IT Ops',          role: 'IT Operations',      icon: '💻', color: 'accent' },
+  { id: 'risk',    name: '风控顾问',    nameEn: 'Risk Advisor',     role: 'Risk & Compliance',  icon: '🛡️', color: 'accent' },
+  { id: 'finance', name: '财务分析师',  nameEn: 'Finance Analyst',  role: 'Financial Analysis', icon: '📊', color: 'accent' },
+  { id: 'service', name: '客服专员',    nameEn: 'Customer Service', role: 'Customer Support',   icon: '🎧', color: 'accent' },
+];
+
+const MOCK_CONVERSATIONS = [
+  { id: 'c1', title: '服务器集群健康检查', preview: '已完成3个节点扫描...', agentColor: 'neutral' },
+  { id: 'c2', title: '数据库备份状态报告', preview: '备份任务全部完成',     agentColor: 'neutral' },
+  { id: 'c3', title: '网络带宽异常排查',   preview: '发现2处异常流量',       agentColor: 'neutral' },
+  { id: 'c4', title: '月度运维分析报告',   preview: '可用率达到99.97%...',    agentColor: 'neutral' },
+  { id: 'c5', title: 'Q1风险评估报告',     preview: '低风险，建议持续...',    agentColor: 'neutral' },
+  { id: 'c6', title: '应用部署流水线检查', preview: '3个服务待更新',          agentColor: 'neutral' },
+  { id: 'c7', title: '防火墙规则审计',     preview: '发现5条冗余规则',        agentColor: 'neutral' },
+  { id: 'c8', title: 'K8S集群资源分析',    preview: '推荐扩容2个节点',        agentColor: 'neutral' },
+];
+
+const INIT_MESSAGES = [
+  {
+    id: 'm0', role: 'assistant', agentName: 'IT运维助手', agentIcon: '💻', agentColor: 'accent',
+    time: '09:14',
+    content: '您好！我是 **IT运维助手**，专注于企业IT系统的监控、运维和故障处理。\n\n我可以帮您：\n- 查询服务器、数据库、网络设备状态\n- 分析系统日志和告警事件\n- 生成运维报告和容量规划\n- 执行标准化运维操作流程\n\n请问有什么可以协助您的？',
+  },
+  {
+    id: 'm1', role: 'user', time: '09:15', userInitial: 'Z',
+    content: '帮我检查一下当前生产环境所有数据库服务的运行状态，重点关注连接池使用情况。',
+    files: [{ name: 'db-config.xlsx', size: '42 KB', type: 'excel' }]
+  },
+  {
+    id: 'm2', role: 'assistant', agentName: 'IT运维助手', agentIcon: '💻', agentColor: 'accent',
+    time: '09:15',
+    content: '收到，正在扫描所有生产数据库节点...',
+    toolCalls: [
+      {
+        tool: 'database_query',
+        description: '查询数据库集群状态',
+        status: 'success',
+        input: { target: 'prod-cluster', scope: ['mysql-primary', 'mysql-replica-01', 'redis-01', 'mongo-shard'], metrics: ['connection_pool', 'latency', 'throughput'] },
+        output: { mysql_primary: { status: 'HEALTHY', connections: '87/200', latency: '2.3ms' }, 'mysql-replica-01': { status: 'HEALTHY', connections: '43/150', latency: '1.8ms' }, 'redis-01': { status: 'HEALTHY', hit_rate: '94.2%', memory: '68%' }, 'mongo-shard': { status: 'WARNING', connections: '148/150', latency: '12.4ms' } }
+      },
+      {
+        tool: 'api_call',
+        description: '拉取 MongoDB 慢查询日志',
+        status: 'success',
+        input: { service: 'mongo-shard', endpoint: '/api/metrics/slow_queries', since: '2h' },
+        output: '找到 23 条慢查询记录，主要集中在 transactions 集合的聚合操作，平均耗时 340ms。'
+      }
+    ]
+  },
+  {
+    id: 'm3', role: 'assistant', agentName: 'IT运维助手', agentIcon: '💻', agentColor: 'accent',
+    time: '09:16',
+    content: '扫描完成，以下是数据库状态汇总：\n\n### ✅ 正常服务\n- **MySQL Primary** — 连接池 87/200（43%），延迟 2.3ms，状态良好\n- **MySQL Replica-01** — 连接池 43/150（29%），延迟 1.8ms，同步正常\n- **Redis-01** — 命中率 94.2%，内存使用 68%，运行稳定\n\n### ⚠️ 需关注\n- **MongoDB Shard** — 连接池 **148/150（98.7%）**，存在连接池耗尽风险！检测到 23 条慢查询，主要为 `transactions` 集合的聚合操作（平均 340ms）\n\n**建议立即处理：**\n- 将 MongoDB 连接池上限从 150 扩展至 300\n- 对 `transactions` 集合添加复合索引\n- 考虑将部分聚合查询改为异步任务'
+  }
+];
+
+let msgIdCounter = 10;
+const newId = () => `m${msgIdCounter++}`;
+
+function simulateStream(text, onChunk, onDone) {
+  let i = 0;
+  const interval = setInterval(() => {
+    if (i >= text.length) { clearInterval(interval); onDone(); return; }
+    const chunk = Math.floor(Math.random() * 4) + 1;
+    i = Math.min(i + chunk, text.length);
+    onChunk(text.slice(0, i));
+  }, 18);
+  return interval;
+}
+
+function getAgentResponse(agent, userText) {
+  const responses = {
+    'it-ops': {
+      toolCalls: [
+        { tool: 'system_query', description: '查询相关系统资源', status: 'success',
+          input: { query: userText.slice(0,50), scope: 'production' },
+          output: { result: 'Query completed', records: Math.floor(Math.random()*100)+10 } }
+      ],
+      text: `已处理您的请求：**${userText.slice(0,30)}...**\n\n系统查询已完成，共检索到相关记录。根据当前系统状态分析：\n\n- 所有核心服务运行正常\n- 资源使用率处于健康范围\n- 未发现严重告警事件\n\n如需进一步操作或详细报告，请告知。`
+    },
+    'risk': {
+      toolCalls: [
+        { tool: 'risk_check', description: '执行风险评估模型', status: 'success',
+          input: { scenario: userText.slice(0,40), risk_model: 'v3.2' },
+          output: { risk_level: 'LOW', score: 0.12, factors: ['normal_access_pattern', 'within_limit'] } }
+      ],
+      text: `风险评估完成。\n\n**评估结论：低风险（评分 0.12/1.0）**\n\n- 访问模式：符合正常业务规律\n- 交易金额：在风控阈值范围内\n- 用户行为：无异常特征\n\n建议：**正常放行**，保持常规监控频率即可。`
+    },
+    'finance': {
+      toolCalls: [
+        { tool: 'report_generate', description: '生成财务分析报告', status: 'success',
+          input: { period: 'current_quarter', metrics: ['revenue', 'cost', 'margin'] },
+          output: { revenue: '¥2.4B', growth: '+12.3%', margin: '34.7%' } }
+      ],
+      text: `财务数据分析完成。\n\n**本季度核心指标：**\n- **营业收入**：¥24亿（同比 +12.3%）\n- **成本费用**：¥15.7亿（控制良好）\n- **净利润率**：34.7%\n\n整体经营趋势向好，建议关注下季度利率变动对利差收入的影响。`
+    },
+    'service': {
+      toolCalls: [
+        { tool: 'user_lookup', description: '查询客户信息', status: 'success',
+          input: { query: userText.slice(0,30), source: 'CRM' },
+          output: { matched: 1, customer: { level: 'VIP', satisfaction: '4.8/5', open_tickets: 0 } } }
+      ],
+      text: `您好，已为您查询相关信息。\n\n**客户档案：**\n- 客户等级：VIP白金卡客户\n- 满意度评分：4.8/5.0\n- 待处理工单：0\n\n如需为客户办理具体业务或有其他问题，请直接告知。`
+    }
+  };
+  return responses[agent.id] || responses['it-ops'];
+}
+
+function App() {
+  const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+    "theme": "modernLight",
+    "fontSize": 14,
+    "density": "comfortable",
+    "showTimestamp": true
+  }/*EDITMODE-END*/;
+
+  const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
+
+  const theme = THEMES[tweaks.theme] || THEMES.deepBlue;
+
+  // Resolve symbolic colors to actual hex values
+  const resolveColor = React.useCallback((c) => {
+    if (c === 'accent') return THEMES[tweaks.theme]?.accent || '#1d4ed8';
+    if (c === 'neutral') return THEMES[tweaks.theme]?.subtext || '#94a3b8';
+    return c || THEMES[tweaks.theme]?.accent || '#1d4ed8';
+  }, [tweaks.theme]);
+
+  // ?mock=1 forces the legacy in-memory simulator (useful for offline UX work).
+  const useMock = (typeof window !== 'undefined') &&
+                  new URLSearchParams(window.location.search).get('mock') === '1';
+
+  const [page, setPage] = React.useState(() =>
+    useMock || (window.JarvisAPI && window.JarvisAPI.getToken && window.JarvisAPI.getToken()) ? 'chat' : 'login'
+  );
+  const [user, setUser] = React.useState(() =>
+    (window.JarvisAPI && window.JarvisAPI.getUser && window.JarvisAPI.getUser()) || null
+  );
+  const [currentAgent, setCurrentAgent] = React.useState(AGENTS[0]);
+  const [conversations, setConversations] = React.useState(useMock ? MOCK_CONVERSATIONS : []);
+  const [currentConv, setCurrentConv] = React.useState(useMock ? MOCK_CONVERSATIONS[0] : null);
+  const [messages, setMessages] = React.useState(() =>
+    INIT_MESSAGES.map(m => m.agentColor ? {...m, agentColor: THEMES['modernLight'].accent} : m)
+  );
+  const [isThinking, setIsThinking] = React.useState(false);
+  const [streamingId, setStreamingId] = React.useState(null);
+  const [pendingApproval, setPendingApproval] = React.useState(null);
+  const lastSendRef = React.useRef(null); // remembers last {text, agentId} for re-send after approval
+  const messagesEndRef = React.useRef(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  };
+  React.useEffect(() => { scrollToBottom(); }, [messages, isThinking]);
+
+  // ---- Conversations: fetch from backend after login ----
+  const refreshConversations = React.useCallback(async () => {
+    if (useMock || !user) return;
+    try {
+      const list = await window.JarvisAPI.listConversations(50);
+      const enriched = list.map(c => ({
+        id: c.session_id, title: c.title || '新建对话',
+        preview: c.preview || '', agentColor: 'neutral', agent_id: c.agent_id,
+      }));
+      setConversations(enriched);
+      if (!currentConv && enriched.length) setCurrentConv(enriched[0]);
+    } catch (e) {
+      console.warn('listConversations failed', e);
+    }
+  }, [user, useMock, currentConv]);
+
+  React.useEffect(() => { refreshConversations(); }, [refreshConversations]);
+
+  const handleLogin = async (userData) => {
+    // userData already populated by Login.jsx (it called the API).
+    setUser(userData);
+    setPage('chat');
+  };
+
+  const handleLogout = async () => {
+    try { await window.JarvisAPI.logout(); } catch (_) {}
+    setUser(null);
+    setConversations([]);
+    setCurrentConv(null);
+    setMessages([]);
+    setPage('login');
+  };
+
+  // ---- Stream a chat turn against the backend ----
+  const streamChat = React.useCallback((opts) => {
+    // opts: {text, files, agentId, sessionId, approvalReceipt?}
+    const aiMsgId = newId();
+    const aiMsg = {
+      id: aiMsgId, role: 'assistant',
+      agentName: currentAgent.name, agentIcon: currentAgent.icon, agentColor: resolveColor(currentAgent.color),
+      time: new Date().toLocaleTimeString('zh-CN', { hour:'2-digit', minute:'2-digit' }),
+      content: '', toolCalls: [],
+    };
+    setMessages(prev => [...prev, aiMsg]);
+    setIsThinking(true);
+    setStreamingId(aiMsgId);
+
+    const ctx = {};
+    if (opts.approvalReceipt) ctx.approval_receipt = opts.approvalReceipt;
+
+    let resolvedSessionId = opts.sessionId || (currentConv && currentConv.id) || '';
+
+    window.JarvisSSE.chatStream({
+      message: opts.text || '',
+      sessionId: resolvedSessionId,
+      agentId: opts.agentId || currentAgent.id,
+      context: ctx,
+      onEvent: (event, data) => {
+        if (event === 'start') {
+          if (data && data.session_id) {
+            resolvedSessionId = data.session_id;
+            if (!currentConv || currentConv.id !== data.session_id) {
+              setCurrentConv(prev => prev || { id: data.session_id, title: opts.text || '新建对话', preview: '', agent_id: opts.agentId || currentAgent.id });
+            }
+          }
+        } else if (event === 'tool_call') {
+          setIsThinking(false);
+          setMessages(prev => prev.map(m => {
+            if (m.id !== aiMsgId) return m;
+            const tcs = (m.toolCalls || []).slice();
+            tcs.push({
+              tool: data.tool || 'tool',
+              description: data.description || data.tool || '',
+              status: data.status || 'running',
+              input: data.input || {},
+            });
+            return { ...m, toolCalls: tcs };
+          }));
+        } else if (event === 'tool_result') {
+          setMessages(prev => prev.map(m => {
+            if (m.id !== aiMsgId) return m;
+            const tcs = (m.toolCalls || []).slice();
+            // Update most recent matching tool that's still running.
+            for (let i = tcs.length - 1; i >= 0; i--) {
+              if (tcs[i].tool === data.tool && tcs[i].status === 'running') {
+                tcs[i] = { ...tcs[i], status: 'success', output: data.output };
+                break;
+              }
+            }
+            return { ...m, toolCalls: tcs };
+          }));
+        } else if (event === 'approval_required') {
+          // Buffer; modal opens after final
+          setPendingApproval({
+            request_id: data.request_id, action: data.action,
+            risk_level: data.risk_level, payload: data.payload,
+          });
+        } else if (event === 'final') {
+          setIsThinking(false);
+          setMessages(prev => prev.map(m =>
+            m.id === aiMsgId ? { ...m, content: data.message || '' } : m
+          ));
+        } else if (event === 'error') {
+          setIsThinking(false);
+          setMessages(prev => prev.map(m =>
+            m.id === aiMsgId
+              ? { ...m, content: `**错误**：${(data && (data.message || data.detail)) || 'unknown error'}` }
+              : m
+          ));
+        }
+      },
+      onError: (err) => {
+        setIsThinking(false);
+        setStreamingId(null);
+        setMessages(prev => prev.map(m =>
+          m.id === aiMsgId ? { ...m, content: `**网络错误**：${err.message || err}` } : m
+        ));
+      },
+      onDone: () => {
+        setIsThinking(false);
+        setStreamingId(null);
+        refreshConversations();
+      },
+    });
+  }, [currentAgent, currentConv, refreshConversations, resolveColor]);
+
+  const handleSend = ({ text, files }) => {
+    if (!text && (!files || files.length === 0)) return;
+
+    const userMsg = {
+      id: newId(), role: 'user',
+      time: new Date().toLocaleTimeString('zh-CN', { hour:'2-digit', minute:'2-digit' }),
+      content: text, files: files && files.length > 0 ? files : undefined,
+      userInitial: (user?.display_name || user?.username || 'U').charAt(0).toUpperCase(),
+    };
+    setMessages(prev => [...prev, userMsg]);
+    lastSendRef.current = { text, agentId: currentAgent.id };
+
+    if (useMock) {
+      // Legacy mock path (unchanged).
+      const thinkTime = 800 + Math.random() * 1200;
+      setIsThinking(true);
+      setTimeout(() => {
+        setIsThinking(false);
+        const response = getAgentResponse(currentAgent, text || '文件分析请求');
+        const aiMsgId = newId();
+        const aiMsg = {
+          id: aiMsgId, role: 'assistant',
+          agentName: currentAgent.name, agentIcon: currentAgent.icon, agentColor: resolveColor(currentAgent.color),
+          time: new Date().toLocaleTimeString('zh-CN', { hour:'2-digit', minute:'2-digit' }),
+          content: '', toolCalls: response.toolCalls,
+        };
+        setMessages(prev => [...prev, aiMsg]);
+        setStreamingId(aiMsgId);
+        simulateStream(response.text, (partial) => {
+          setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, content: partial } : m));
+        }, () => setStreamingId(null));
+      }, thinkTime);
+      return;
+    }
+
+    streamChat({ text, files, agentId: currentAgent.id });
+  };
+
+  // After user clicks Approve/Reject in the modal:
+  const handleApprovalDecision = (receipt) => {
+    setPendingApproval(null);
+    if (!receipt || !lastSendRef.current) return;
+    streamChat({
+      text: '',                       // empty re-send; backend continues the plan
+      agentId: lastSendRef.current.agentId,
+      approvalReceipt: receipt,
+    });
+  };
+  const handleApprovalReject = () => {
+    setPendingApproval(null);
+    setMessages(prev => [...prev, {
+      id: newId(), role: 'assistant',
+      agentName: currentAgent.name, agentIcon: currentAgent.icon, agentColor: resolveColor(currentAgent.color),
+      time: new Date().toLocaleTimeString('zh-CN', { hour:'2-digit', minute:'2-digit' }),
+      content: '已拒绝该高风险操作。',
+    }]);
+  };
+
+  const handleNewChat = async () => {
+    let newConv = null;
+    if (!useMock && user) {
+      try {
+        newConv = await window.JarvisAPI.createConversation({ agent_id: currentAgent.id, title: '新建对话' });
+        setCurrentConv({ id: newConv.session_id, title: newConv.title, preview: '', agent_id: newConv.agent_id });
+        await refreshConversations();
+      } catch (e) {
+        console.warn('createConversation failed', e);
+      }
+    } else {
+      setCurrentConv(null);
+    }
+    setMessages([{
+      id: newId(), role: 'assistant',
+      agentName: currentAgent.name, agentIcon: currentAgent.icon, agentColor: resolveColor(currentAgent.color),
+      time: new Date().toLocaleTimeString('zh-CN', { hour:'2-digit', minute:'2-digit' }),
+      content: `您好！我是 **${currentAgent.name}**（${currentAgent.nameEn || currentAgent.role}）。\n\n请告诉我您的需求，我来为您处理。`
+    }]);
+  };
+
+  const handleConvChange = async (conv) => {
+    setCurrentConv(conv);
+    if (useMock || !user || !conv || !conv.id) return;
+    try {
+      const data = await window.JarvisAPI.getConversationMessages(conv.id, 50);
+      const msgs = (data.messages || []).map((m, i) => ({
+        id: `hist-${conv.id}-${i}`,
+        role: m.role,
+        time: '',
+        content: m.content,
+        agentName: currentAgent.name, agentIcon: currentAgent.icon, agentColor: resolveColor(currentAgent.color),
+        userInitial: (user?.display_name || user?.username || 'U').charAt(0).toUpperCase(),
+      }));
+      if (msgs.length === 0) {
+        msgs.push({
+          id: newId(), role: 'assistant',
+          agentName: currentAgent.name, agentIcon: currentAgent.icon, agentColor: resolveColor(currentAgent.color),
+          time: '', content: `继续对话：**${conv.title}**`,
+        });
+      }
+      setMessages(msgs);
+    } catch (e) {
+      console.warn('getConversationMessages failed', e);
+    }
+  };
+
+  const handleAgentChange = (agent) => {
+    setCurrentAgent(agent);
+    setMessages([{
+      id: newId(), role: 'assistant',
+      agentName: agent.name, agentIcon: agent.icon, agentColor: resolveColor(agent.color),
+      time: new Date().toLocaleTimeString('zh-CN', { hour:'2-digit', minute:'2-digit' }),
+      content: `已切换至 **${agent.name}**。您好，我专注于${agent.role}相关业务，有什么可以协助您的？`
+    }]);
+  };
+
+  // Surface pending approval as modal once `final` arrives.
+  React.useEffect(() => {
+    if (!pendingApproval) return;
+    // Modal renders below; nothing else needed here.
+  }, [pendingApproval]);
+
+  return (
+    <div style={{ width:'100%', height:'100%', position:'relative' }}>
+      {page === 'login' && <LoginPage onLogin={handleLogin} theme={theme} />}
+      {page === 'chat' && (
+        <div style={{ width:'100%', height:'100%', display:'flex', flexDirection:'column', background: theme.bg }}>
+          {/* Top Bar */}
+          <div style={{
+            height:52, display:'flex', alignItems:'center', padding:'0 20px 0 0',
+            borderBottom:`1px solid ${theme.border}`, background: theme.sidebarBg,
+            flexShrink:0, gap:0
+          }}>
+            {/* Left: Sidebar logo area */}
+            <div style={{ width:260, display:'flex', alignItems:'center', padding:'0 16px', flexShrink:0 }}></div>
+
+            {/* Center: Agent indicator */}
+            <div style={{ flex:1, display:'flex', alignItems:'center', gap:10, paddingLeft:16 }}>
+              <div style={{
+                display:'flex', alignItems:'center', gap:8, padding:'4px 12px',
+                background:`${currentAgent.color}14`, border:`1px solid ${currentAgent.color}30`,
+                borderRadius:20
+              }}>
+                <span style={{ fontSize:14 }}>{currentAgent.icon}</span>
+                <span style={{ color:currentAgent.color, fontSize:12, fontWeight:600 }}>{currentAgent.name}</span>
+                <div style={{ width:6, height:6, borderRadius:'50%', background:'#10b981' }}></div>
+                <span style={{ color:theme.subtext, fontSize:10 }}>在线</span>
+              </div>
+              <span style={{ color:theme.subtext, fontSize:11, opacity:0.6 }}>
+                {currentConv?.title || '新建对话'}
+              </span>
+            </div>
+
+            {/* Right: Actions */}
+            <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+              {[
+                { icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>, tip:'分析' },
+                { icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>, tip:'设置' },
+              ].map((btn, i) => (
+                <button key={i} title={btn.tip} style={{
+                  background:'none', border:'none', cursor:'pointer', color:theme.subtext,
+                  padding:'7px', borderRadius:7, display:'flex', alignItems:'center', justifyContent:'center',
+                  transition:'color 0.15s'
+                }}
+                onMouseEnter={e => e.currentTarget.style.color = theme.accent}
+                onMouseLeave={e => e.currentTarget.style.color = theme.subtext}
+                >{btn.icon}</button>
+              ))}
+
+              {/* Share / export */}
+              <button style={{
+                background:`${theme.accent}18`, border:`1px solid ${theme.accent}30`,
+                borderRadius:7, padding:'5px 12px', color:theme.accent, fontSize:12, fontWeight:600,
+                cursor:'pointer', display:'flex', alignItems:'center', gap:6
+              }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8M16 6l-4-4-4 4M12 2v13"/></svg>
+                导出
+              </button>
+            </div>
+          </div>
+
+          {/* Main Content */}
+          <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
+            <Sidebar
+              theme={theme}
+              agents={AGENTS.map(a => ({...a, color: resolveColor(a.color)}))}
+              currentAgent={{...currentAgent, color: resolveColor(currentAgent.color)}}
+              onAgentChange={handleAgentChange}
+              conversations={(conversations || []).map(c => ({...c, agentColor: resolveColor(c.agentColor || 'neutral')}))}
+              currentConv={currentConv}
+              onConvChange={handleConvChange}
+              onNewChat={handleNewChat}
+              user={user}
+              onLogout={handleLogout}
+            />
+
+            {/* Chat Area */}
+            <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+              <ChatMessages
+                messages={messages}
+                isThinking={isThinking}
+                currentAgent={currentAgent}
+                theme={theme}
+                messagesEndRef={messagesEndRef}
+                streamingId={streamingId}
+              />
+              <ChatInput
+                theme={theme}
+                onSend={handleSend}
+                disabled={isThinking || streamingId !== null}
+                currentAgent={currentAgent}
+              />
+            </div>
+          </div>
+
+          {pendingApproval && (
+            <ApprovalModal
+              approval={pendingApproval}
+              theme={theme}
+              onApproved={handleApprovalDecision}
+              onRejected={handleApprovalReject}
+              onDismiss={() => setPendingApproval(null)}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Tweaks Panel */}
+      <TweaksPanel>
+        <TweakSection title="主题 / Theme">
+          <TweakRadio id="theme" label="视觉风格" value={tweaks.theme} onChange={v => setTweak('theme', v)}
+            options={[
+              { value: 'deepBlue', label: '深蓝金融' },
+              { value: 'darkTech', label: '暗夜科技' },
+              { value: 'emerald', label: '翡翠绿' },
+              { value: 'modernLight', label: '现代简约' },
+            ]}
+          />
+        </TweakSection>
+        <TweakSection title="排版 / Typography">
+          <TweakSlider id="fontSize" label="字号 Font Size" min={12} max={16} step={1} value={tweaks.fontSize} onChange={v => setTweak('fontSize', v)} />
+        </TweakSection>
+        <TweakSection title="布局 / Layout">
+          <TweakRadio id="density" label="信息密度" value={tweaks.density} onChange={v => setTweak('density', v)}
+            options={[{ value: 'compact', label: '紧凑' }, { value: 'comfortable', label: '舒适' }]}
+          />
+          <TweakToggle id="showTimestamp" label="显示时间戳" value={tweaks.showTimestamp} onChange={v => setTweak('showTimestamp', v)} />
+        </TweakSection>
+        <TweakSection title="演示 / Demo">
+          <TweakButton label="切换到登录页" onClick={() => setPage('login')} />
+          <TweakButton label="切换到主界面" onClick={() => { setUser({ username: 'admin' }); setMessages(INIT_MESSAGES.map(m => m.agentColor ? {...m, agentColor: resolveColor(m.agentColor)} : m)); setPage('chat'); }} />
+        </TweakSection>
+      </TweaksPanel>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

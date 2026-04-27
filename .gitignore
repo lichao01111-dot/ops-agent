@@ -25,3 +25,9 @@ Thumbs.db
 
 # Docker
 docker-compose.override.yml
+
+# Frontend / scratch
+frontend/uploads/
+node_modules
+outputs/
+tmp/
