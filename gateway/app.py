@@ -164,10 +164,10 @@ async def health():
 
 @app.get("/")
 async def index():
-    """Default landing → JARVIS frontend (falls back to playground)."""
-    jarvis_html = FRONTEND_DIR / "JARVIS.html"
-    if jarvis_html.exists():
-        return FileResponse(jarvis_html)
+    """Default landing → /app/ so relative asset URLs resolve under /app/."""
+    from fastapi.responses import RedirectResponse
+    if (FRONTEND_DIR / "JARVIS.html").exists():
+        return RedirectResponse(url="/app/JARVIS.html", status_code=307)
     if PLAYGROUND_PATH.exists():
         return FileResponse(PLAYGROUND_PATH)
     raise HTTPException(status_code=404, detail="No landing page available")
@@ -309,7 +309,7 @@ async def chat_stream(
 
         async def stub_stream():
             yield f"event: start\ndata: {json.dumps({'session_id': session_id})}\n\n"
-            yield f"event: final\ndata: {json.dumps(stub, ensure_ascii=False)}\n\n"
+            yield f"event: final\ndata: {json.dumps(stub, ensure_ascii=False, default=str)}\n\n"
 
         return StreamingResponse(stub_stream(), media_type="text/event-stream")
 
@@ -341,9 +341,9 @@ async def chat_stream(
                     )
                     yield (
                         "event: approval_required\n"
-                        f"data: {json.dumps({'request_id': pending.request_id, 'action': pending.action, 'risk_level': pending.risk_level, 'payload': data}, ensure_ascii=False)}\n\n"
+                        f"data: {json.dumps({'request_id': pending.request_id, 'action': pending.action, 'risk_level': pending.risk_level, 'payload': data}, ensure_ascii=False, default=str)}\n\n"
                     )
-            payload = json.dumps(data, ensure_ascii=False)
+            payload = json.dumps(data, ensure_ascii=False, default=str)
             yield f"event: {event_type}\ndata: {payload}\n\n"
 
         conversation_index.touch(

@@ -30,6 +30,7 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       KNOWLEDGE_PG_DSN: postgresql://ops_agent:ops_agent@postgres:5432/ops_agent
+      LANGFUSE_HOST: http://host.docker.internal:3000
     volumes:
       - ./data:/app/data
       - ~/.kube:/root/.kube:ro  # K8s config (只读)

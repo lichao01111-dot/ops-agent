@@ -65,6 +65,47 @@ class OpenAICompatibleEmbeddingClient(EmbeddingClient):
 
 
 @dataclass
+class GoogleEmbeddingClient(EmbeddingClient):
+    api_key: str
+    model: str
+    vector_dimensions: int
+    batch_size: int
+    api_endpoint: str = ""
+
+    def __post_init__(self) -> None:
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+        if not self.api_key:
+            raise RuntimeError("google_api_key / embedding_api_key 未配置，无法调用 Google Embedding 接口。")
+
+        client_options = {"api_endpoint": self.api_endpoint} if self.api_endpoint else None
+        self._client = GoogleGenerativeAIEmbeddings(
+            model=self.model,
+            google_api_key=self.api_key,
+            client_options=client_options,
+        )
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        vectors = self._client.embed_documents(
+            texts,
+            batch_size=max(1, self.batch_size),
+            task_type="RETRIEVAL_DOCUMENT",
+            output_dimensionality=self.vector_dimensions,
+        )
+        logger.info("embedding_batch_complete", provider="google", count=len(vectors), model=self.model)
+        return vectors
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._client.embed_query(
+            text,
+            task_type="RETRIEVAL_QUERY",
+            output_dimensionality=self.vector_dimensions,
+        )
+
+
+@dataclass
 class LocalSentenceTransformerEmbeddingClient(EmbeddingClient):
     model_name: str
 
@@ -88,6 +129,15 @@ class LocalSentenceTransformerEmbeddingClient(EmbeddingClient):
 
 def create_embedding_client() -> EmbeddingClient:
     provider = settings.embedding_provider.lower().strip()
+    if provider == "google":
+        api_key = settings.embedding_api_key or settings.google_api_key
+        return GoogleEmbeddingClient(
+            api_key=api_key,
+            model=settings.embedding_model,
+            vector_dimensions=settings.embedding_dimensions,
+            batch_size=settings.embedding_batch_size,
+            api_endpoint=settings.embedding_base_url or settings.google_api_base_url,
+        )
     if provider == "openai_compatible":
         api_key = settings.embedding_api_key or settings.openai_api_key
         base_url = settings.embedding_base_url or settings.openai_base_url

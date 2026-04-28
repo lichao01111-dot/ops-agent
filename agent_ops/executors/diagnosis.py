@@ -30,8 +30,26 @@ from agent_ops.extractors import extract_namespace, extract_pod_name, extract_se
 from agent_ops.memory_schema import OPS_MEMORY_SCHEMA
 from agent_ops.schemas import AgentIdentity, AgentRoute, Hypothesis, HypothesisVerdict, MemoryLayer
 from agent_ops.topology import ServiceTopology, get_topology
+from llm_gateway.prompt_registry import prompt_registry
 
 logger = structlog.get_logger()
+
+
+_HYPOTHESIS_PROMPT = (
+    "你是 OpsAgent 的诊断假设生成器。\n"
+    "基于用户诉求、事实层信息（K8s状态/Events/最近构建/历史incident）和拓扑提示，"
+    "产出最多 {max_hypotheses} 条互不重复的诊断假设。\n"
+    "要求：\n"
+    "- 每条 hypothesis 包含 statement、suspected_target、evidence_tools\n"
+    "- evidence_tools 只能从以下候选工具中选：{candidate_tools}\n"
+    "- evidence_tools 每条最多 {evidence_tools_per_hypothesis} 个\n"
+    "- 优先引用已采集到的异常事件作为假设来源，避免无依据猜测\n"
+    "- 不要解释，直接输出结构化结果\n\n"
+    "用户诉求：{goal}\n"
+    "事实层上下文（incident context）：\n{incident_ctx}\n"
+    "详细症状数据：{symptoms_json}\n"
+    "拓扑提示：{topology_hint}"
+)
 
 
 MAX_HYPOTHESES = 4
@@ -318,25 +336,21 @@ class DiagnosisExecutor(ExecutorBase):
             )
         incident_ctx = "\n".join(context_sections) if context_sections else "无"
 
-        prompt = (
-            "你是 OpsAgent 的诊断假设生成器。\n"
-            "基于用户诉求、事实层信息（K8s状态/Events/最近构建/历史incident）和拓扑提示，"
-            f"产出最多 {MAX_HYPOTHESES} 条互不重复的诊断假设。\n"
-            "要求：\n"
-            "- 每条 hypothesis 包含 statement、suspected_target、evidence_tools\n"
-            "- evidence_tools 只能从以下候选工具中选：" + ", ".join(candidate_tools) + "\n"
-            "- evidence_tools 每条最多 " + str(EVIDENCE_TOOLS_PER_HYPOTHESIS) + " 个\n"
-            "- 优先引用已采集到的异常事件作为假设来源，避免无依据猜测\n"
-            "- 不要解释，直接输出结构化结果\n\n"
-            f"用户诉求：{goal}\n"
-            f"事实层上下文（incident context）：\n{incident_ctx}\n"
-            f"详细症状数据：{self._truncate(json.dumps(symptoms, ensure_ascii=False), 1200)}\n"
-            f"拓扑提示：{topology_hint or '无'}"
+        prompt = prompt_registry.get_prompt(
+            "ops/diagnosis/hypothesis_generation",
+            _HYPOTHESIS_PROMPT,
+            max_hypotheses=MAX_HYPOTHESES,
+            candidate_tools=", ".join(candidate_tools),
+            evidence_tools_per_hypothesis=EVIDENCE_TOOLS_PER_HYPOTHESIS,
+            goal=goal,
+            incident_ctx=incident_ctx,
+            symptoms_json=self._truncate(json.dumps(symptoms, ensure_ascii=False), 1200),
+            topology_hint=topology_hint or "无",
         )
 
         try:
             structured = llm.with_structured_output(HypothesisDraftList)
-            draft_list = await structured.ainvoke(prompt)
+            draft_list = await structured.ainvoke(prompt.text, prompt_meta=prompt.meta)
         except Exception as exc:
             logger.warning("hypothesis_generation_failed", error=str(exc))
             return []

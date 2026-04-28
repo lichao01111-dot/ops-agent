@@ -12,6 +12,8 @@ from langgraph.graph.message import add_messages
 from agent_kernel.approval import ApprovalPolicy
 from agent_kernel.audit import AuditLogger
 from agent_kernel.executor import ExecutorBase
+from agent_kernel.observability import StageContext, StageObservabilitySink, TraceContext
+from agent_kernel.observability._context import current_observation_handle, current_trace_handle, current_trace_id
 from agent_kernel.schemas import (
     ChatRequest,
     ChatResponse,
@@ -59,12 +61,14 @@ class BaseAgent:
         executors: list[ExecutorBase],
         audit_logger: AuditLogger,
         approval_policy: ApprovalPolicy | None = None,
+        observability_sink: StageObservabilitySink | None = None,
     ):
         self.planner = planner
         self.session_store = session_store
         self.executors = executors
         self.audit_logger = audit_logger
         self.approval_policy = approval_policy
+        self.observability_sink = observability_sink
         self.executor_nodes = {executor.node_name: executor for executor in executors}
         self.graph = self._build_graph()
 
@@ -87,74 +91,88 @@ class BaseAgent:
         return run_executor
 
     async def _planner_node(self, state: AgentState) -> dict[str, Any]:
-        plan = state.get("plan")
-        if plan is None:
-            message = self._get_latest_user_message(state["messages"])
-            request = ChatRequest(
-                message=message,
-                session_id=state["session_id"],
-                user_id=state["user_id"],
-                user_role=state["user_role"],
-                context=state["context"],
-            )
-            plan = await self.planner.initial_plan(request)
-            first_step = plan.current_step()
-            if first_step is None:
+        handle, token = self._stage_start("planner", "planner", state=state)
+        error: Exception | None = None
+        output: Any = None
+        try:
+            plan = state.get("plan")
+            if plan is None:
+                message = self._get_latest_user_message(state["messages"])
+                request = ChatRequest(
+                    message=message,
+                    session_id=state["session_id"],
+                    user_id=state["user_id"],
+                    user_role=state["user_role"],
+                    context=state["context"],
+                )
+                plan = await self.planner.initial_plan(request)
+                first_step = plan.current_step()
+                if first_step is None:
+                    plan.done = True
+                    output = {"plan_id": plan.plan_id, "step_count": len(plan.steps), "decision": PlanDecision.FINISH}
+                    return {"plan": plan, "plan_decision": PlanDecision.FINISH}
+                self.session_store.update_route_state(
+                    state["session_id"],
+                    intent=first_step.intent,
+                    route=first_step.route,
+                    risk_level=first_step.risk_level,
+                    metadata={
+                        "requires_approval": first_step.requires_approval,
+                        "plan_id": plan.plan_id,
+                        "step_id": first_step.step_id,
+                        "execution_target": first_step.execution_target,
+                    },
+                )
+                output = {"plan_id": plan.plan_id, "routes": [step.route for step in plan.steps]}
+                return {
+                    "plan": plan,
+                    "plan_decision": PlanDecision.CONTINUE,
+                    "intent": first_step.intent,
+                    "route": first_step.route,
+                    "risk_level": first_step.risk_level,
+                    "needs_approval": first_step.requires_approval,
+                }
+
+            last_step = self._last_completed_step(plan)
+            decision = self.planner.advance(plan, last_step=last_step)
+            if decision == PlanDecision.FINISH:
+                plan.final_message = self._assemble_final_message(plan, state.get("final_message", ""))
+                output = {"plan_id": plan.plan_id, "decision": decision}
+                return {"plan": plan, "plan_decision": decision, "final_message": plan.final_message}
+
+            step = plan.current_step()
+            if step is None:
                 plan.done = True
-                return {"plan": plan, "plan_decision": PlanDecision.FINISH}
+                plan.final_message = self._assemble_final_message(plan, state.get("final_message", ""))
+                output = {"plan_id": plan.plan_id, "decision": PlanDecision.FINISH}
+                return {"plan": plan, "plan_decision": PlanDecision.FINISH, "final_message": plan.final_message}
+
             self.session_store.update_route_state(
                 state["session_id"],
-                intent=first_step.intent,
-                route=first_step.route,
-                risk_level=first_step.risk_level,
+                intent=step.intent,
+                route=step.route,
+                risk_level=step.risk_level,
                 metadata={
-                    "requires_approval": first_step.requires_approval,
+                    "requires_approval": step.requires_approval,
                     "plan_id": plan.plan_id,
-                    "step_id": first_step.step_id,
-                    "execution_target": first_step.execution_target,
+                    "step_id": step.step_id,
+                    "execution_target": step.execution_target,
                 },
             )
+            output = {"plan_id": plan.plan_id, "decision": decision, "route": step.route}
             return {
                 "plan": plan,
-                "plan_decision": PlanDecision.CONTINUE,
-                "intent": first_step.intent,
-                "route": first_step.route,
-                "risk_level": first_step.risk_level,
-                "needs_approval": first_step.requires_approval,
+                "plan_decision": decision,
+                "intent": step.intent,
+                "route": step.route,
+                "risk_level": step.risk_level,
+                "needs_approval": step.requires_approval,
             }
-
-        last_step = self._last_completed_step(plan)
-        decision = self.planner.advance(plan, last_step=last_step)
-        if decision == PlanDecision.FINISH:
-            plan.final_message = self._assemble_final_message(plan, state.get("final_message", ""))
-            return {"plan": plan, "plan_decision": decision, "final_message": plan.final_message}
-
-        step = plan.current_step()
-        if step is None:
-            plan.done = True
-            plan.final_message = self._assemble_final_message(plan, state.get("final_message", ""))
-            return {"plan": plan, "plan_decision": PlanDecision.FINISH, "final_message": plan.final_message}
-
-        self.session_store.update_route_state(
-            state["session_id"],
-            intent=step.intent,
-            route=step.route,
-            risk_level=step.risk_level,
-            metadata={
-                "requires_approval": step.requires_approval,
-                "plan_id": plan.plan_id,
-                "step_id": step.step_id,
-                "execution_target": step.execution_target,
-            },
-        )
-        return {
-            "plan": plan,
-            "plan_decision": decision,
-            "intent": step.intent,
-            "route": step.route,
-            "risk_level": step.risk_level,
-            "needs_approval": step.requires_approval,
-        }
+        except Exception as exc:
+            error = exc
+            raise
+        finally:
+            self._stage_end(handle, token, output, error)
 
     def _dispatcher(self, state: AgentState) -> str:
         plan = state.get("plan")
@@ -198,11 +216,14 @@ class BaseAgent:
         step = plan.current_step() if plan else None
         if step is None:
             return {}
+        handle, token = self._stage_start("executor", f"executor:{step.route}", state=state, route=str(step.route))
         step.status = PlanStepStatus.RUNNING
+        error: Exception | None = None
         try:
             result = await executor(state)
             step.status = PlanStepStatus.SUCCEEDED
         except Exception as exc:
+            error = exc
             logger.error("plan_step_failed", step=step.step_id, error=str(exc))
             step.status = PlanStepStatus.FAILED
             result = {
@@ -217,6 +238,7 @@ class BaseAgent:
         merged_tool_calls = (state.get("tool_calls") or []) + new_events
         merged_sources = sorted(set((state.get("sources") or [])) | set(result.get("sources") or []))
         plan.cursor += 1
+        self._stage_end(handle, token, step.result_summary, error)
         return {
             "plan": plan,
             "tool_calls": merged_tool_calls,
@@ -227,9 +249,26 @@ class BaseAgent:
     async def chat(self, request: ChatRequest) -> ChatResponse:
         start_time = time.time()
         session_id = request.session_id or str(uuid.uuid4())
+        trace_id = str(uuid.uuid4())
         logger.info("chat_request", user=request.user_id, session=session_id, message=request.message[:100])
 
         initial_state = self._build_initial_state(request, session_id)
+        trace_handle = self._trace_start(
+            TraceContext(
+                trace_id=trace_id,
+                name="agent_chat",
+                session_id=session_id,
+                user_id=request.user_id,
+                vertical="ops",
+                input=request.message,
+                metadata={"user_role": request.user_role.value},
+            )
+        )
+        trace_token = current_trace_handle.set(trace_handle)
+        obs_token = current_observation_handle.set(trace_handle)
+        trace_id_token = current_trace_id.set(trace_id)
+        trace_error: Exception | None = None
+        final_message = ""
 
         try:
             result = await self.graph.ainvoke(initial_state)
@@ -241,6 +280,7 @@ class BaseAgent:
             sources = result.get("sources", [])
             needs_approval = result.get("needs_approval", False)
         except Exception as exc:
+            trace_error = exc
             logger.error("agent_execution_failed", error=str(exc), session=session_id)
             final_message = f"抱歉，处理请求时遇到了错误：{exc}\n请检查相关服务是否可用，或联系管理员。"
             tool_calls = []
@@ -249,6 +289,11 @@ class BaseAgent:
             risk_level = RiskLevel.MEDIUM
             sources = []
             needs_approval = False
+        finally:
+            self._trace_end(trace_handle, final_message, trace_error)
+            current_observation_handle.reset(obs_token)
+            current_trace_handle.reset(trace_token)
+            current_trace_id.reset(trace_id_token)
 
         self._persist_session_turn(session_id, request.message, final_message)
         duration_ms = int((time.time() - start_time) * 1000)
@@ -275,6 +320,64 @@ class BaseAgent:
             sources=sources,
             tokens_used=0,
         )
+
+    def _trace_start(self, ctx: TraceContext) -> Any:
+        if not self.observability_sink:
+            return None
+        try:
+            return self.observability_sink.trace_start(ctx)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("trace_start_failed", error=str(exc))
+            return None
+
+    def _trace_end(self, handle: Any, output: Any, error: Exception | None) -> None:
+        if not self.observability_sink:
+            return
+        try:
+            self.observability_sink.trace_end(handle, output, error)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("trace_end_failed", error=str(exc))
+
+    def _stage_start(
+        self,
+        stage_kind: str,
+        name: str,
+        *,
+        state: AgentState,
+        route: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[Any, Any]:
+        parent = current_observation_handle.get()
+        if not self.observability_sink or parent is None:
+            return None, None
+        try:
+            handle = self.observability_sink.stage_start(
+                parent,
+                StageContext(
+                    stage_kind=stage_kind,
+                    name=name,
+                    route=route or str(state.get("route") or ""),
+                    metadata={
+                        "session_id": state.get("session_id", ""),
+                        **(metadata or {}),
+                    },
+                ),
+            )
+            token = current_observation_handle.set(handle or parent)
+            return handle, token
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("stage_start_failed", stage=name, error=str(exc))
+            return None, None
+
+    def _stage_end(self, handle: Any, token: Any, output: Any, error: Exception | None) -> None:
+        if token is not None:
+            current_observation_handle.reset(token)
+        if not self.observability_sink:
+            return
+        try:
+            self.observability_sink.stage_end(handle, output, error)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("stage_end_failed", error=str(exc))
 
     def _build_initial_state(self, request: ChatRequest, session_id: str) -> AgentState:
         history = self.session_store.get_recent_messages(session_id, limit=6)

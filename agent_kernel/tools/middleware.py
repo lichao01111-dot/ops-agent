@@ -505,6 +505,27 @@ class MetricsMiddleware:
     async def __call__(self, ctx: InvocationContext, next_: Next) -> Any:
         started = time.perf_counter()
         outcome = "ok"
+        stage_handle = None
+        stage_token = None
+        try:
+            from agent_kernel.observability import StageContext
+            from agent_kernel.observability._context import current_observation_handle
+
+            parent = current_observation_handle.get()
+            if parent is not None and hasattr(self.sink, "stage_start"):
+                stage_handle = self.sink.stage_start(
+                    parent,
+                    StageContext(
+                        stage_kind="tool",
+                        name=f"tool:{ctx.tool_name}",
+                        route=ctx.route,
+                        metadata={"session_id": ctx.session_id, "attempt": ctx.attempt},
+                    ),
+                )
+                stage_token = current_observation_handle.set(stage_handle or parent)
+        except Exception:  # pragma: no cover - defensive
+            stage_handle = None
+            stage_token = None
         # OTel-style sinks that need to wrap the call open a span BEFORE
         # next_(). We optionally call ``.start`` if the sink exposes it.
         span = None
@@ -526,6 +547,18 @@ class MetricsMiddleware:
             duration_ms = int((time.perf_counter() - started) * 1000)
             sample = self._make_sample(ctx, outcome, duration_ms)
             self._record(sample)
+            if stage_handle is not None and hasattr(self.sink, "stage_end"):
+                try:
+                    self.sink.stage_end(stage_handle, {"outcome": outcome, "duration_ms": duration_ms}, None if outcome == "ok" else RuntimeError(outcome))
+                except Exception:  # pragma: no cover - defensive
+                    pass
+            if stage_token is not None:
+                try:
+                    from agent_kernel.observability._context import current_observation_handle
+
+                    current_observation_handle.reset(stage_token)
+                except Exception:  # pragma: no cover - defensive
+                    pass
             if span is not None and hasattr(self.sink, "end"):
                 try:
                     self.sink.end(span, sample)

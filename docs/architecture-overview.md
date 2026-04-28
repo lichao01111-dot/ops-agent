@@ -119,10 +119,102 @@ context_signals ┘                        低: 调 LLM 二次确认，取置信
 
 ### 4.3 Planner — 拆分 + 自动补 step
 
-`agent_kernel/planner.py` + `agent_ops/planner.py`。
+`agent_kernel/planner.py` (kernel 抽象) + `agent_ops/planner.py` (Ops 实现)。
 
-- `build_initial_plan()`：正则切分 "先…再…/然后/;" 成多个 step。`MAX_COMPOUND_SEGMENTS=3` 防止过度拆分。
-- `advance()`：每个 step 完成后调用。`OpsPlanner._maybe_replan` 检测上一步是 MUTATION 且 intent ∈ `_MUTATION_INTENTS_NEEDING_VERIFY`，自动追加 `AgentRoute.VERIFICATION` step。
+**总体哲学**：能用规则就用规则，LLM 只在规则不够智能时兜底。规则覆盖约 80% 常见请求，LLM 只接复杂自然语言。两条路径产出同一个 `PlanStep` schema，下游执行器看不出差异，且都受同一套**白名单 / 审批 / 自动验证** 安全约束。
+
+#### `initial_plan(request)` 三层处理
+
+```
+                    用户消息
+                       │
+          ┌────────────▼────────────┐
+          │  L1: 规则切分           │  agent_ops/planner.py:46-114
+          │  split_compound_ops()   │
+          │                         │
+          │  ① 显式中文连接词正则:  │
+          │     然后 / 接着 / 再 /  │
+          │     并 / ,然后 / ，然后 │
+          │  ② 基础设施日志双跳:    │
+          │     "查 mysql 日志" →   │
+          │     先查地址 + 再查日志 │
+          │  上限 MAX_COMPOUND      │
+          │  _SEGMENTS=3            │
+          └────────────┬────────────┘
+            切到 ≥2 段?
+              │YES         │NO (1 段)
+              ▼            ▼
+        逐段调 router    ┌──────────────────────────┐
+        构造 plan        │ L2: LLM 兜底             │
+                         │ _initial_plan_with_llm() │ agent_ops/planner.py:138-192
+                         │                          │
+                         │ 触发条件白名单:          │
+                         │  查出/找到/定位/根据/    │
+                         │  相关/对应/地址/配置/    │
+                         │  日志/异常/生产/prod/    │
+                         │  mysql/redis/kafka/...   │
+                         │                          │
+                         │ Gemini structured output │
+                         │ → PlanDraft (JSON)       │
+                         │                          │
+                         │ 严格校验:                │
+                         │  - route 在 4 路由白名单 │
+                         │  - mutation 强制 approval│
+                         │  - 不一致回退 router 决策│
+                         │  - <2 step 则放弃        │
+                         └────────────┬─────────────┘
+                            LLM 给 ≥2 step?
+                       │YES                │NO / 失败
+                       ▼                   ▼
+                   构造 Plan       ┌──────────────────────┐
+                                   │ L3: 单 step 兜底     │ agent_kernel/planner.py:93-120
+                                   │ super().initial_plan │
+                                   │ 走 router 单 step    │
+                                   └──────────────────────┘
+```
+
+**关键约束**：LLM 输出**永不被信任**。即使 LLM 切出了 plan：
+- `route` 必须在 `{knowledge, read_only_ops, diagnosis, mutation}` 白名单
+- `mutation` 强制 `requires_approval=True`，LLM 没权限关审批
+- LLM 选的 route 跟 router 算出来不一致 → 强制改回 router 的
+- LLM 给的 prompt / version 透传到 Langfuse 便于追溯
+
+LLM 在这里只能做**"拆分 + 排序 + 给 goal 文本"**，不能改任何安全约束。
+
+#### `advance(plan, last_step)` — 完全规则
+
+```python
+if iterations >= max_iterations:    return FINISH   # 硬上限
+if last_step.status == FAILED:      return FINISH   # 失败 fail-fast
+if any step.status == PENDING:      return CONTINUE # 顺序执行
+if _maybe_replan() != None:         return REPLAN   # 钩子追加 step
+return FINISH
+```
+
+**没有 LLM 参与 advance 决策**。
+
+#### `_maybe_replan` — Vertical 钩子，规则触发
+
+`agent_ops/planner.py:249-280` 写死：mutation step **成功** + intent ∈ `{k8s_restart, k8s_scale, k8s_rollback, k8s_operate}` → 自动追加 `verification` step。
+
+这是为什么重启 deployment 后 agent 会自动去轮询验证 —— 不是 LLM 临时决定，是写死的安全闭环。
+
+#### 实测 4 个真实例子（2026-04 验证）
+
+| 输入 | L1 切几段 | L2 触发? | 最终 | rationale |
+|---|---|---|---|---|
+| "查一下 default ns 的 pod" | 1 | ❌ | 1 step `read_only_ops` | `fast_path_keyword_routing` |
+| "查 deployment，然后重启 order-service" | **2** (然后) | ❌ | 2 step: `read_only_ops` → `mutation` (approval=True) | `compound_request_split` |
+| "查生产环境 mysql 的相关日志" | **2** (infra-log) | 不需要 | 2 step: `knowledge` → `read_only_ops` | `compound_request_split` |
+| "找到 prod 数据库地址，并查它最近的异常日志" | 1 | ✅ | 2 step: `knowledge` → `read_only_ops` (Gemini 切的) | `llm_planner_fallback:...` |
+
+最后一例是隐式依赖（"找到 X 并查它的 Y"），简单正则切不动 —— 必须语义理解。这是 L2 LLM 层的核心价值场景。
+
+#### 几个故意不上 LLM 的地方
+
+- **Router 主路径**：关键词 + 置信度阈值。命中明确关键词 → conf=0.9；多类别 → conf=0.55 触发 LLM 二次确认（但只确认意图，不改 plan 结构）
+- **审批门**：纯 HMAC + receipt 校验
+- **verification 轮询**：周期 / 次数都是配置常数
 
 ### 4.4 ExecutorBase
 

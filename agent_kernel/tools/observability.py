@@ -37,34 +37,13 @@ needed.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Protocol
+from typing import Any, Callable, Iterable
 
 import structlog
 
+from agent_kernel.observability import MetricSample, MetricsSink
+
 logger = structlog.get_logger()
-
-
-# =============================================================================
-# Sample + protocol
-# =============================================================================
-
-@dataclass(frozen=True)
-class MetricSample:
-    """One tool-invocation measurement, emitted once by MetricsMiddleware."""
-    tool: str
-    outcome: str                  # "ok" | "error:<ExcType>"
-    duration_ms: int
-    slo_p95_ms: int = 0           # 0 = no SLO declared
-    over_slo: bool = False
-    session_id: str = ""
-    user_id: str = ""
-    route: str = ""
-    attempt: int = 1
-    extra: dict[str, Any] = field(default_factory=dict)
-
-
-class MetricsSink(Protocol):
-    def record(self, sample: MetricSample) -> None: ...
 
 
 # =============================================================================
@@ -110,6 +89,50 @@ class MultiSink:
                     sink_type=type(sink).__name__,
                     error=str(exc),
                 )
+
+    def stage_start(self, parent: Any, ctx: Any) -> Any:
+        handles: list[tuple[Any, Any]] = []
+        for sink in self.children:
+            method = getattr(sink, "stage_start", None)
+            if not callable(method):
+                continue
+            try:
+                handles.append((sink, method(parent, ctx)))
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("metrics_stage_start_failed", sink_type=type(sink).__name__, error=str(exc))
+        return handles or None
+
+    def stage_end(self, handle: Any, output: Any, error: Exception | None) -> None:
+        for sink, child_handle in handle or []:
+            method = getattr(sink, "stage_end", None)
+            if not callable(method):
+                continue
+            try:
+                method(child_handle, output, error)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("metrics_stage_end_failed", sink_type=type(sink).__name__, error=str(exc))
+
+    def llm_start(self, parent: Any, ctx: Any) -> Any:
+        handles: list[tuple[Any, Any]] = []
+        for sink in self.children:
+            method = getattr(sink, "llm_start", None)
+            if not callable(method):
+                continue
+            try:
+                handles.append((sink, method(parent, ctx)))
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("metrics_llm_start_failed", sink_type=type(sink).__name__, error=str(exc))
+        return handles or None
+
+    def llm_end(self, handle: Any, output: Any, error: Exception | None) -> None:
+        for sink, child_handle in handle or []:
+            method = getattr(sink, "llm_end", None)
+            if not callable(method):
+                continue
+            try:
+                method(child_handle, output, error)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("metrics_llm_end_failed", sink_type=type(sink).__name__, error=str(exc))
 
 
 # =============================================================================

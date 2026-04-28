@@ -161,11 +161,12 @@ cp .env.example .env
 **LLM（至少配置一组）：**
 
 ```bash
-# OpenAI
-LLM_PROVIDER=openai
-LLM_MODEL=gpt-4o
-OPENAI_API_KEY=sk-xxx
-ROUTER_LLM_MODEL=gpt-4o-mini    # Router 用轻量模型
+# Google AI
+LLM_PROVIDER=google
+LLM_MODEL=gemini-2.0-flash
+GOOGLE_API_KEY=your-google-api-key
+ROUTER_LLM_PROVIDER=google
+ROUTER_LLM_MODEL=gemini-2.0-flash-lite    # Router 用轻量模型
 
 # DeepSeek
 LLM_PROVIDER=deepseek
@@ -211,9 +212,9 @@ LOKI_URL=http://localhost:3100
 
 ```bash
 KNOWLEDGE_PG_DSN=postgresql://user:pass@localhost:5433/opsdb
-EMBEDDING_PROVIDER=openai_compatible
-EMBEDDING_MODEL=text-embedding-3-small
-EMBEDDING_API_KEY=sk-xxx
+EMBEDDING_PROVIDER=google
+EMBEDDING_MODEL=gemini-embedding-001
+EMBEDDING_API_KEY=your-google-api-key   # 留空时回退到 GOOGLE_API_KEY
 ```
 
 **Redis session 持久化：**
@@ -229,6 +230,22 @@ REDIS_SESSION_TTL_SECONDS=604800    # 7 天（默认）
 SERVER_HOST=0.0.0.0
 SERVER_PORT=8000
 ```
+
+**Langfuse 可观测性（默认关闭）：**
+
+```bash
+LANGFUSE_ENABLED=true
+LANGFUSE_PUBLIC_KEY=pk-lf-xxx
+LANGFUSE_SECRET_KEY=sk-lf-xxx
+LANGFUSE_HOST=https://langfuse.internal
+LANGFUSE_SAMPLE_RATE=0.1
+LANGFUSE_ENABLED_VERTICALS=ops
+LANGFUSE_PROMPT_MANAGEMENT_ENABLED=false
+LANGFUSE_PROMPT_LABEL=production
+LANGFUSE_PROMPT_FALLBACK_ON_ERROR=true
+```
+
+开启后会采样上报 `agent_chat` trace、planner/executor/tool span 和 LLM generation。Langfuse 故障不会中断请求路径。
 
 ### 3. 索引知识库
 
@@ -392,7 +409,7 @@ ops-agent/
 │   └── adapters/
 │       └── im_adapter.py            ← IM 适配骨架
 ├── llm_gateway/
-│   └── __init__.py                  ← LLM 提供商抽象（OpenAI / DeepSeek / Anthropic）
+│   └── __init__.py                  ← LLM 提供商抽象（Google / OpenAI / DeepSeek / Anthropic）
 ├── tools/
 │   ├── k8s_tool/                    ← 9 个 K8s 工具（含 3 个写操作）
 │   ├── jenkins_tool/                ← 3 个 Jenkins 工具

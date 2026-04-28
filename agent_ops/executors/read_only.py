@@ -38,10 +38,25 @@ class ReadOnlyOpsExecutor(ExecutorBase):
                     return message.content
         return ""
 
+    def _get_current_goal(self, state: dict[str, Any]) -> str:
+        plan = state.get("plan")
+        step = plan.current_step() if plan else None
+        return step.goal if step and step.goal else self._get_latest_user_message(state["messages"])
+
+    def _extract_log_service(self, message: str, context: dict[str, Any], session_id: str) -> str:
+        service = extract_service_name(message, context, self.session_store, session_id)
+        if service:
+            return service
+        lowered = message.lower()
+        for component in ("mysql", "redis", "kafka", "postgres", "postgresql"):
+            if component in lowered:
+                return "postgres" if component == "postgresql" else component
+        return ""
+
     def _plan_read_only_tool(self, message: str, context: dict[str, Any], session_id: str = "") -> list[tuple[str, dict[str, Any]]] | None:
         lowered = message.lower()
         namespace = extract_namespace(message, context, self.session_store, session_id)
-        service = extract_service_name(message, context, self.session_store, session_id)
+        service = self._extract_log_service(message, context, session_id)
         build_number = extract_build_number(message, context)
         time_range = extract_time_range(message, context)
 
@@ -385,7 +400,7 @@ class ReadOnlyOpsExecutor(ExecutorBase):
 
 
     async def execute(self, state: dict[str, Any], event_callback: Callable | None = None) -> dict[str, Any]:
-        message = self._get_latest_user_message(state["messages"])
+        message = self._get_current_goal(state)
         if self._is_config_lookup_request(message):
             return await self._execute_config_lookup(state, message, event_callback)
 

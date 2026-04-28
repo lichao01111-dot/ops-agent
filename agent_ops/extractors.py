@@ -56,6 +56,15 @@ def extract_namespace(message: str, context: dict[str, Any], session_store: Any,
     for candidate in [context.get("namespace"), context.get("env"), context.get("environment")]:
         if isinstance(candidate, str) and candidate in settings.allowed_namespaces + settings.readonly_namespaces:
             return candidate
+    if "生产" in message:
+        for namespace in settings.readonly_namespaces:
+            if namespace in ("prod", "production"):
+                return namespace
+        if settings.readonly_namespaces:
+            return settings.readonly_namespaces[0]
+    if any(token in message.lower() for token in ("staging", "预发", "测试")):
+        if "staging" in settings.allowed_namespaces:
+            return "staging"
     for namespace in settings.allowed_namespaces + settings.readonly_namespaces:
         if namespace and namespace in message:
             return namespace

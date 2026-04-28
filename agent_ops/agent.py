@@ -21,6 +21,7 @@ import structlog
 from agent_kernel.approval import ApprovalDecision
 from agent_kernel.audit import AuditLogger
 from agent_kernel.base_agent import BaseAgent
+from agent_kernel.observability.bootstrap import build_stage_observability_sink
 from agent_kernel.schemas import (
     ChatRequest,
     ApprovalReceipt,
@@ -33,10 +34,12 @@ from agent_kernel.session import SessionStore
 from agent_kernel.tools.mcp_gateway import MCPClient
 from agent_kernel.tools.middleware import (
     InvocationContext,
+    MetricsMiddleware,
     Middleware,
     build_default_chain,
     run_chain,
 )
+from agent_kernel.tools.observability import MultiSink, StructlogSink
 from agent_kernel.tools.invoker import ToolInvoker
 from agent_kernel.tools.registry import ToolRegistry
 from agent_ops.risk_policy import OpsApprovalPolicy
@@ -88,14 +91,20 @@ class OpsAgent(BaseAgent):
         self.tool_registry = tool_registry
         self.mcp_client = mcp_client
         self.router = IntentRouter()
+        self.observability_sink = build_stage_observability_sink("ops")
+        llm_gateway.set_observability_sink(self.observability_sink)
         # Non-functional envelope: timeout / retry / circuit / idempotency /
         # cost-budget / schema-version / metrics. Built once and reused for
         # every tool invocation. Callers can inject a custom chain for tests
         # or swap backends for Redis in production.
-        self.middlewares: list[Middleware] = (
-            middlewares if middlewares is not None else build_default_chain()
-        )
-        self.planner = OpsPlanner(router=self.router)
+        if middlewares is not None:
+            self.middlewares = middlewares
+        else:
+            metrics_sink = StructlogSink()
+            if self.observability_sink is not None:
+                metrics_sink = MultiSink(children=[metrics_sink, self.observability_sink])
+            self.middlewares = build_default_chain(metrics_middleware=MetricsMiddleware(sink=metrics_sink))
+        self.planner = OpsPlanner(router=self.router, llm_provider=llm_gateway.get_main_model)
         self.approval_policy = OpsApprovalPolicy()
         self.topology = get_topology()
 
@@ -120,6 +129,7 @@ class OpsAgent(BaseAgent):
             # index_documents (route=MUTATION, admin-only, gated by approval)
             invoke_tool=_mk_invoker("knowledge_executor", ("knowledge", "mutation")),
             session_store=local_session_store,
+            llm_provider=llm_gateway.get_main_model,  # RAG: chunks -> grounded answer
         )
         self.read_only_executor = ReadOnlyOpsExecutor(
             invoke_tool=_mk_invoker("read_only_executor", ("read_only_ops",)),
@@ -161,6 +171,7 @@ class OpsAgent(BaseAgent):
                 self.verification_executor,
             ],
             approval_policy=self.approval_policy,
+            observability_sink=self.observability_sink,
         )
         logger.info(
             "ops_agent_initialized",

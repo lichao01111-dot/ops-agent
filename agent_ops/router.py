@@ -13,8 +13,21 @@ import structlog
 from agent_kernel.router import RouterBase
 from agent_kernel.schemas import ChatRequest, RiskLevel, RouteDecision
 from agent_ops.schemas import AgentRoute, IntentType
+from llm_gateway.prompt_registry import prompt_registry
 
 logger = structlog.get_logger()
+
+
+_ROUTER_PROMPT = (
+    "你是 OpsAgent 的路由器。"
+    "只做任务分类，不回答用户问题。"
+    "根据用户请求输出 RouteDecision："
+    "knowledge=知识/文档/环境问答；"
+    "read_only_ops=只读查询（Pod 状态、日志、构建状态）；"
+    "diagnosis=故障诊断/原因分析；"
+    "mutation=任何有副作用或需要审批的动作（重启/扩缩容/回滚/索引/生成 Jenkinsfile）。"
+    "verification 路由仅由系统内部使用，禁止输出。"
+)
 
 
 class IntentRouter(RouterBase):
@@ -241,18 +254,20 @@ class IntentRouter(RouterBase):
                 rationale="matched_knowledge_index_keywords",
             )
 
-        if self._contains_any(text, self.KNOWLEDGE_KEYWORDS):
-            return RouteDecision(
-                intent=IntentType.KNOWLEDGE_QA,
-                route=AgentRoute.KNOWLEDGE,
-                rationale="matched_knowledge_keywords",
-            )
-
         if self._contains_any(text, self.CONFIG_QUERY_KEYWORDS):
             return RouteDecision(
                 intent=IntentType.K8S_STATUS,
                 route=AgentRoute.READ_ONLY_OPS,
                 rationale="matched_config_query_keywords",
+            )
+
+        if any(token in text for token in ("日志", "log")) and not any(
+            token in text for token in ("为什么", "原因", "诊断", "分析", "排查", "根因")
+        ):
+            return RouteDecision(
+                intent=IntentType.LOG_SEARCH,
+                route=AgentRoute.READ_ONLY_OPS,
+                rationale="matched_log_query_keywords",
             )
 
         if self._contains_any(text, self.DIAGNOSIS_KEYWORDS):
@@ -267,6 +282,20 @@ class IntentRouter(RouterBase):
                 route=AgentRoute.DIAGNOSIS,
                 risk_level=RiskLevel.MEDIUM,
                 rationale="matched_diagnosis_keywords",
+            )
+
+        if any(token in text for token in ("日志", "log")):
+            return RouteDecision(
+                intent=IntentType.LOG_SEARCH,
+                route=AgentRoute.READ_ONLY_OPS,
+                rationale="matched_log_query_keywords",
+            )
+
+        if self._contains_any(text, self.KNOWLEDGE_KEYWORDS):
+            return RouteDecision(
+                intent=IntentType.KNOWLEDGE_QA,
+                route=AgentRoute.KNOWLEDGE,
+                rationale="matched_knowledge_keywords",
             )
 
         if self._contains_any(text, self.RESTART_KEYWORDS):
@@ -369,20 +398,12 @@ class IntentRouter(RouterBase):
         router_model = llm_gateway.get_router_model()
         structured_router = router_model.with_structured_output(RouteDecision)
 
-        prompt = (
-            "你是 OpsAgent 的路由器。"
-            "只做任务分类，不回答用户问题。"
-            "根据用户请求输出 RouteDecision："
-            "knowledge=知识/文档/环境问答；"
-            "read_only_ops=只读查询（Pod 状态、日志、构建状态）；"
-            "diagnosis=故障诊断/原因分析；"
-            "mutation=任何有副作用或需要审批的动作（重启/扩缩容/回滚/索引/生成 Jenkinsfile）。"
-            "verification 路由仅由系统内部使用，禁止输出。"
-        )
+        prompt = prompt_registry.get_prompt("ops/router/intent_classification", _ROUTER_PROMPT)
 
         try:
             decision = await structured_router.ainvoke(
-                [{"role": "system", "content": prompt}, {"role": "user", "content": request.message}]
+                [{"role": "system", "content": prompt.text}, {"role": "user", "content": request.message}],
+                prompt_meta=prompt.meta,
             )
             if isinstance(decision, RouteDecision):
                 return decision

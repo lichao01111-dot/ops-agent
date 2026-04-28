@@ -373,4 +373,48 @@ class InMemorySessionStore(SessionStore):
             self._sessions.pop(session_id, None)
 
 def create_session_store(*, memory_schema: MemorySchema | None = None) -> SessionStore:
+    """Auto-select backend.
+
+    If ``settings.redis_url`` is set AND a quick PING succeeds, return a
+    Redis-backed store. Otherwise fall back to in-memory. Either way,
+    callers see the same SessionStore interface.
+
+    Two escape hatches:
+      * env ``JARVIS_SESSION_BACKEND=memory`` forces in-memory
+        (used by pytest auto-detection — Redis is shared keyspace, which
+        breaks per-instance isolation contracts asserted by tests)
+      * ``PYTEST_CURRENT_TEST`` set → also forces in-memory
+
+    The Redis probe is intentionally swallowed on any error — a healthy
+    local dev experience must not require Redis.
+    """
+    import os
+    if os.environ.get("JARVIS_SESSION_BACKEND", "").lower() == "memory":
+        return InMemorySessionStore(memory_schema=memory_schema or DEFAULT_MEMORY_SCHEMA)
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return InMemorySessionStore(memory_schema=memory_schema or DEFAULT_MEMORY_SCHEMA)
+
+    try:
+        from config import settings  # local import to avoid a hard cycle
+        url = getattr(settings, "redis_url", "") or ""
+        if url:
+            import redis  # type: ignore
+            client = redis.Redis.from_url(url, socket_timeout=1.5)
+            client.ping()
+            from agent_kernel.redis_session import RedisSessionStore  # lazy
+            import structlog  # type: ignore
+            structlog.get_logger().info("session_store_selected", backend="redis", url=url)
+            return RedisSessionStore(
+                client,
+                memory_schema=memory_schema or DEFAULT_MEMORY_SCHEMA,
+            )
+    except Exception as exc:  # pragma: no cover - env-dependent
+        try:
+            import structlog  # type: ignore
+            structlog.get_logger().warning(
+                "session_store_redis_unavailable_fallback_inmem",
+                error=str(exc),
+            )
+        except Exception:
+            pass
     return InMemorySessionStore(memory_schema=memory_schema or DEFAULT_MEMORY_SCHEMA)
